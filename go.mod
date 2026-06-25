@@ -7,7 +7,7 @@ require (
 	github.com/liliang-cn/agent-go/v2 v2.92.0
 	github.com/liliang-cn/cortexdb/v2 v2.35.0
 	github.com/liliang-cn/eval-go v0.1.0
-	github.com/liliang-cn/semantic-go v0.0.0
+	github.com/liliang-cn/semantic-go v0.1.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -115,8 +115,3 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.38.2 // indirect
 )
-
-// semantic-go isn't published yet — resolve it locally (workspace also covers this).
-replace github.com/liliang-cn/semantic-go => ../semantic-go
-
-replace github.com/liliang-cn/eval-go => ../eval-go
