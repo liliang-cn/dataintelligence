@@ -1,0 +1,54 @@
+# EXAMPLE integration manifest — "Meridian Retail" wired to a diverse, real
+# enterprise source landscape. This is a CUSTOMER artifact, not platform code:
+# the platform only knows the source TYPES below; this file supplies the domain.
+# Secrets should come from the env as ${VAR}; local-default creds are inline here
+# only because these are throwaway local containers.
+
+sources:
+  # Online-channel orders living in the e-commerce app's own MySQL.
+  - name: online_orders
+    type: mysql
+    config:
+      dsn: "channel:channelpw@tcp(localhost:33106)/channel"
+      query: "SELECT order_ref, customer_email, channel, amount, status, placed_at FROM web_orders"
+
+  # Product reviews as documents in MongoDB.
+  - name: reviews
+    type: mongo
+    config:
+      uri: "mongodb://localhost:37017"
+      database: "meridian"
+      collection: "reviews"
+      limit: "500"
+
+  # Real-time inventory counters in Redis (stock:<product_id>:<store_id>).
+  - name: live_inventory
+    type: redis
+    config:
+      addr: "localhost:36379"
+      match: "stock:*"
+
+  # Supplier price-list files dropped into an S3 bucket (MinIO).
+  - name: supplier_catalog
+    type: s3
+    config:
+      endpoint: "localhost:39002"
+      access_key: "${MINIO_ACCESS_KEY}"
+      secret_key: "${MINIO_SECRET_KEY}"
+      bucket: "supplier-feeds"
+      prefix: "catalogs/"
+      use_ssl: "false"
+
+  # Order/clickstream events on a Kafka topic (Redpanda).
+  - name: order_events
+    type: kafka
+    config:
+      brokers: "localhost:39094"
+      topic: "order-events"
+      max: "200"
+
+  # A flat-file partner feed (CSV on disk).
+  - name: contacts_csv
+    type: csv
+    config:
+      path: "testdata/contacts.csv"

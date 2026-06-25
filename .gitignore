@@ -4,3 +4,6 @@ idx.db
 testdata/oidc/
 /di
 *.test
+deploy/crm/.env
+deploy/crm/twenty-compose.upstream.yml
+deploy/crm/twenty.env.upstream

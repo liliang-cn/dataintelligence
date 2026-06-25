@@ -1,0 +1,45 @@
+# EXAMPLE workflow (Meridian) — composed from the platform's generic step
+# primitives. All business logic lives here, not in platform code: a supplier
+# price-list lands in S3 → stage it → compute margin impact → HUMAN approval →
+# apply new costs (snapshot for rollback) → recompute margins. `di flow rollback`
+# restores the prior costs and drops the staged tables.
+name: supplier-price-update
+steps:
+  - name: stage-catalog
+    type: ingest
+    source: supplier_catalog          # resolved from examples/meridian/sources.yaml
+    table: _src_supplier_catalog
+
+  - name: price-impact
+    type: sql
+    do: |
+      DROP TABLE IF EXISTS _price_impact;
+      CREATE TABLE _price_impact AS
+        SELECT p.product_id, p.product_name, p.unit_cost AS old_cost,
+               c.unit_cost::numeric AS new_cost,
+               round(c.unit_cost::numeric - p.unit_cost, 2) AS delta
+        FROM products p JOIN _src_supplier_catalog c ON c.product = p.product_name
+    undo: "DROP TABLE IF EXISTS _price_impact"
+
+  - name: approve
+    type: human
+
+  - name: apply-costs
+    type: mutate
+    snapshot: "SELECT product_id, unit_cost FROM products WHERE product_id IN (SELECT product_id FROM _price_impact WHERE delta <> 0)"
+    key: product_id
+    apply: "UPDATE products p SET unit_cost = i.new_cost FROM _price_impact i WHERE p.product_id = i.product_id AND i.delta <> 0"
+    restore: "UPDATE products SET unit_cost = ${unit_cost} WHERE product_id = ${product_id}"
+
+  - name: recompute-margins
+    type: sql
+    do: |
+      DROP TABLE IF EXISTS _margins;
+      CREATE TABLE _margins AS
+        SELECT pr.category,
+               round(sum(oi.quantity*oi.unit_price),2) AS revenue,
+               round(sum(oi.quantity*pr.unit_cost),2) AS cost,
+               round(sum(oi.quantity*oi.unit_price) - sum(oi.quantity*pr.unit_cost),2) AS margin
+        FROM order_items oi JOIN products pr ON oi.product_id = pr.product_id
+        GROUP BY pr.category
+    undo: "DROP TABLE IF EXISTS _margins"

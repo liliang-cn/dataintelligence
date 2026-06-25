@@ -100,8 +100,14 @@ func main() {
 		runShadow(os.Args[2:])
 	case "cdc":
 		runCDC(os.Args[2:])
+	case "crm":
+		runCRM(os.Args[2:])
+	case "webhook":
+		runWebhook(os.Args[2:])
+	case "source":
+		runSource(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
 		os.Exit(2)
 	}
 }
@@ -121,8 +127,7 @@ func runServe(argv []string) {
 		fail(err)
 	}
 	defer eng.Close()
-	fe := flow.NewEngine(eng.WH)
-	fe.Register("ingest-contacts", contactsFlow())
+	fe, _ := newFlowEngine(ctx, *dsn) // flows loaded from files (DI_FLOWS_DIR)
 
 	handler := runtime.NewServer(eng, fe)
 	fmt.Fprintf(os.Stderr, "DataIntelligence API on %s  (GET /metrics /runs /tables /explore?table= /lineage?table= ; POST /query /runs/{id}/{approve|reject|rollback})\n", *addr)
@@ -566,61 +571,30 @@ func runNode(_ []string) {
 	}
 }
 
-// contactsFlow: ingest a CSV → human review → verify. Rollback deletes exactly
-// the rows this run landed (tagged with _run_id). Steps read csv/table/required
-// from the run's persisted state so approve/rollback work across processes.
-func contactsFlow() []flow.Step {
-	return []flow.Step{
-		{
-			Name: "ingest",
-			Do: func(ctx context.Context, rc *flow.RunContext) error {
-				csv, table := str(rc.State["csv"]), str(rc.State["table"])
-				src := &connectors.CSVSource{Path: csv}
-				batch, err := src.Read(ctx)
-				if err != nil {
-					return err
-				}
-				plan := ingest.InferMapping(batch.Schema, table, nil)
-				if req := str(rc.State["required"]); req != "" {
-					plan.Required = split(req)
-				}
-				plan.Tags = []ingest.Tag{{Col: "_run_id", Val: rc.RunID}}
-				rep, err := ingest.Run(ctx, rc.WH, batch, plan)
-				if err != nil {
-					return err
-				}
-				rc.State["landed"] = rep.RowsLanded
-				return nil
-			},
-			Undo: func(ctx context.Context, rc *flow.RunContext) error {
-				table := str(rc.State["table"])
-				_, err := rc.WH.Exec(ctx, `DELETE FROM "`+table+`" WHERE _run_id=$1`, rc.RunID)
-				return err
-			},
-		},
-		{Name: "review", Human: true}, // human approval gate
-		{
-			Name: "verify",
-			Do: func(ctx context.Context, rc *flow.RunContext) error {
-				table := str(rc.State["table"])
-				res, err := rc.WH.Query(ctx, `SELECT count(*) FROM "`+table+`" WHERE _run_id=$1`, rc.RunID)
-				if err != nil {
-					return err
-				}
-				rc.State["verified_count"] = fmt.Sprintf("%v", res.Rows[0][0])
-				return nil
-			},
-		},
-	}
-}
-
+// newFlowEngine loads workflows from FILES (DI_FLOWS_DIR) and resolves their
+// `ingest` sources from the sources manifest (DI_SOURCES). The platform binary
+// carries NO domain flow logic — flows are data supplied by the example/customer.
 func newFlowEngine(ctx context.Context, dsn string) (*flow.Engine, *warehouse.Warehouse) {
 	wh, err := warehouse.OpenPostgres(ctx, dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
 	e := flow.NewEngine(wh)
-	e.Register("ingest-contacts", contactsFlow())
+	sourcesPath := envOr("DI_SOURCES", "examples/meridian/sources.yaml")
+	deps := flow.Deps{ResolveSource: func(name string) (connectors.Source, error) {
+		man, err := connectors.LoadManifest(sourcesPath)
+		if err != nil {
+			return nil, err
+		}
+		return man.BuildByName(name)
+	}}
+	flows, err := flow.LoadDir(envOr("DI_FLOWS_DIR", "examples/meridian/flows"), deps)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load flows: %v\n", err)
+	}
+	for name, steps := range flows {
+		e.Register(name, steps)
+	}
 	return e, wh
 }
 
@@ -635,14 +609,16 @@ func runFlow(argv []string) {
 	switch sub {
 	case "run":
 		fs := flag.NewFlagSet("flow run", flag.ExitOnError)
-		csv := fs.String("csv", "testdata/contacts.csv", "CSV to ingest")
-		table := fs.String("table", "contacts_flow", "target table")
-		required := fs.String("required", "email_address", "required columns")
 		dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
 		_ = fs.Parse(rest)
 		e, wh := newFlowEngine(ctx, *dsn)
 		defer wh.Close()
-		run, err := e.Start(ctx, "ingest-contacts", map[string]any{"csv": *csv, "table": *table, "required": *required})
+		name := strings.TrimSpace(strings.Join(fs.Args(), " "))
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "di flow run <name>  (loaded flows: %s)\n", strings.Join(e.Names(), ", "))
+			os.Exit(2)
+		}
+		run, err := e.Start(ctx, name, map[string]any{})
 		if err != nil {
 			fail(err)
 		}
@@ -698,13 +674,6 @@ func printRun(r *flow.Run) {
 		}
 		fmt.Printf("  [%s] %s%s\n", s.Status, s.Name, info)
 	}
-}
-
-func str(v any) string {
-	if v == nil {
-		return ""
-	}
-	return fmt.Sprintf("%v", v)
 }
 
 func runMCP(argv []string) {
@@ -1143,6 +1112,201 @@ func mustRead(path string) []byte {
 	return b
 }
 
+// runSource is the neutral, manifest-driven multi-source connector: it reads any
+// configured source (mysql/mongo/redis/s3/kafka/csv) and can ingest it into the
+// warehouse. The platform knows source TYPES; the manifest supplies the domain.
+//
+//	di source list   -manifest examples/meridian/sources.yaml
+//	di source read   -manifest ... <name>
+//	di source ingest -manifest ... <name> [-table _src_<name>]
+func runSource(argv []string) {
+	if len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: di source <list|read|ingest> -manifest <f> [name]")
+		os.Exit(2)
+	}
+	sub := argv[0]
+	fs := flag.NewFlagSet("source", flag.ExitOnError)
+	manifest := fs.String("manifest", "examples/meridian/sources.yaml", "sources manifest YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN (for ingest)")
+	table := fs.String("table", "", "target table for ingest (default _src_<name>)")
+	limit := fs.Int("limit", 10, "rows to print for read")
+	_ = fs.Parse(argv[1:])
+	name := strings.TrimSpace(strings.Join(fs.Args(), " "))
+
+	man, err := connectors.LoadManifest(*manifest)
+	if err != nil {
+		fail(err)
+	}
+	ctx := context.Background()
+
+	if sub == "list" {
+		fmt.Printf("%-18s %-10s\n", "NAME", "TYPE")
+		for _, s := range man.Sources {
+			fmt.Printf("%-18s %-10s\n", s.Name, s.Type)
+		}
+		return
+	}
+	if name == "" {
+		fmt.Fprintf(os.Stderr, "di source %s needs a source name (one of: %s)\n", sub, strings.Join(man.Names(), ", "))
+		os.Exit(2)
+	}
+	src, err := man.BuildByName(name)
+	if err != nil {
+		fail(err)
+	}
+	batch, err := src.Read(ctx)
+	if err != nil {
+		fail(err)
+	}
+
+	switch sub {
+	case "read":
+		fmt.Fprintf(os.Stderr, "-- %s: %d rows, fields=%d\n", name, len(batch.Rows), len(batch.Schema.Fields))
+		printRecords(batch, *limit)
+	case "ingest":
+		tbl := *table
+		if tbl == "" {
+			tbl = "_src_" + name
+		}
+		wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+		if err != nil {
+			fail(err)
+		}
+		defer wh.Close()
+		n, err := connectors.Stage(ctx, wh, tbl, batch)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("ingested %d rows from source %q (%s) into %s\n", n, name, man.Spec(name).Type, tbl)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown source subcommand %q (list|read|ingest)\n", sub)
+		os.Exit(2)
+	}
+}
+
+// printRecords prints up to n records as a table over the union of fields.
+func printRecords(b connectors.Batch, n int) {
+	cols := make([]string, 0, len(b.Schema.Fields))
+	for _, f := range b.Schema.Fields {
+		cols = append(cols, f.Name)
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, strings.Join(cols, "\t"))
+	for i, r := range b.Rows {
+		if i >= n {
+			break
+		}
+		cells := make([]string, len(cols))
+		for j, c := range cols {
+			cells[j] = truncCell(r[c], 28)
+		}
+		fmt.Fprintln(w, strings.Join(cells, "\t"))
+	}
+	w.Flush()
+}
+
+func truncCell(s string, n int) string {
+	if len(s) > n {
+		return s[:n-1] + "…"
+	}
+	return s
+}
+
+// runWebhook starts the real-time push receiver: an external system (Twenty CRM)
+// POSTs change events here; each is signature-checked and recorded to _crm_events.
+func runWebhook(argv []string) {
+	fs := flag.NewFlagSet("webhook", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	addr := fs.String("addr", envOr("DI_WEBHOOK_ADDR", ":34200"), "listen address")
+	secret := fs.String("secret", os.Getenv("DI_WEBHOOK_SECRET"), "HMAC secret to verify deliveries")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+
+	srv := &connectors.WebhookServer{WH: wh, Secret: *secret, OnEvent: func(e connectors.WebhookEvent) {
+		fmt.Fprintf(os.Stderr, "← webhook: %s %s id=%s verified=%s\n", e.Event, e.Object, e.RecordID, e.Verified)
+	}}
+	secNote := "unsigned (no secret)"
+	if *secret != "" {
+		secNote = "HMAC-verified"
+	}
+	fmt.Fprintf(os.Stderr, "CRM webhook receiver on %s  POST /webhook (%s) → _crm_events\n", *addr, secNote)
+	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
+		fail(err)
+	}
+}
+
+// runCRM syncs contacts from a real Twenty CRM into the warehouse and joins them
+// to the existing Meridian customers on email — a real "CRM client" connector.
+func runCRM(argv []string) {
+	fs := flag.NewFlagSet("crm", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	base := fs.String("url", envOr("TWENTY_URL", "http://localhost:34100"), "Twenty base URL")
+	key := fs.String("key", os.Getenv("TWENTY_API_KEY"), "Twenty API key (or TWENTY_API_KEY)")
+	since := fs.String("since", "", "incremental: only sync People updated after this ISO8601 cursor")
+	join := fs.Bool("join", true, "after sync, join CRM people to Meridian customers on email")
+	_ = fs.Parse(argv)
+	if *key == "" {
+		fmt.Fprintln(os.Stderr, "di crm: set TWENTY_API_KEY (or -key)")
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+	src := &connectors.TwentyCRM{BaseURL: *base, APIKey: *key}
+
+	var rows []connectors.Record
+	if *since != "" {
+		rows, err = src.Poll(ctx, *since)
+	} else {
+		var b connectors.Batch
+		b, err = src.Read(ctx)
+		rows = b.Rows
+	}
+	if err != nil {
+		fail(err)
+	}
+
+	if _, err := wh.Exec(ctx, `CREATE TABLE IF NOT EXISTS _crm_people (
+		crm_id text PRIMARY KEY, name text, first_name text, last_name text,
+		email text, job_title text, city text, updated_at text, synced_at timestamptz DEFAULT now())`); err != nil {
+		fail(err)
+	}
+	for _, r := range rows {
+		if _, err := wh.Exec(ctx, `INSERT INTO _crm_people (crm_id,name,first_name,last_name,email,job_title,city,updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			ON CONFLICT (crm_id) DO UPDATE SET name=$2,first_name=$3,last_name=$4,email=$5,job_title=$6,city=$7,updated_at=$8,synced_at=now()`,
+			r["crm_id"], r["name"], r["first_name"], r["last_name"], r["email"], r["job_title"], r["city"], r["updated_at"]); err != nil {
+			fail(err)
+		}
+	}
+	fmt.Printf("synced %d CRM people from %s into _crm_people\n", len(rows), *base)
+
+	if !*join {
+		return
+	}
+	// The payoff: CRM ⋈ warehouse on email. The CRM was seeded from Meridian
+	// customers, so this enriches the warehouse's customers with CRM attributes.
+	res, err := wh.Query(ctx, `
+		SELECT c.customer_id, c.customer_name, c.segment, cp.job_title AS crm_segment, cp.crm_id
+		FROM customers c JOIN _crm_people cp ON lower(c.email) = lower(cp.email)
+		ORDER BY c.customer_id LIMIT 20`)
+	if err != nil {
+		fail(err)
+	}
+	cnt, _ := wh.Query(ctx, `SELECT count(*) FROM customers c JOIN _crm_people cp ON lower(c.email)=lower(cp.email)`)
+	fmt.Printf("\n-- enrichment join: Meridian customers ⋈ CRM people on email (%s matched) --\n", scalar(cnt.Rows))
+	printResult(res.Columns, res.Rows)
+}
+
 func runIngest(argv []string) {
 	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
 	csvPath := fs.String("csv", "", "path to a CSV file (required)")
@@ -1535,6 +1699,20 @@ func printAnswer(ans *engine.Answer) {
 		fmt.Fprintf(os.Stderr, "\n-- trace=%s  compile=%dms execute=%dms rows=%d\n", ans.TraceID, ans.CompileMs, ans.ExecMs, len(ans.Rows))
 	}
 	fmt.Fprintf(os.Stderr, "-- compiled SQL --\n%s\n", ans.SQL)
+}
+
+// printResult renders a raw column/row result as a table.
+func printResult(cols []string, rows [][]any) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, strings.Join(cols, "\t"))
+	for _, row := range rows {
+		cells := make([]string, len(row))
+		for i, c := range row {
+			cells[i] = fmt.Sprintf("%v", c)
+		}
+		fmt.Fprintln(w, strings.Join(cells, "\t"))
+	}
+	w.Flush()
 }
 
 func split(s string) []string {

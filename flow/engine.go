@@ -78,6 +78,15 @@ func NewEngine(wh *warehouse.Warehouse) *Engine {
 
 func (e *Engine) Register(name string, steps []Step) { e.flows[name] = steps }
 
+// Names lists registered flow names.
+func (e *Engine) Names() []string {
+	out := make([]string, 0, len(e.flows))
+	for n := range e.flows {
+		out = append(out, n)
+	}
+	return out
+}
+
 func (e *Engine) ensureTable(ctx context.Context) error {
 	_, err := e.wh.Exec(ctx, `CREATE TABLE IF NOT EXISTS _flow_runs (
 		id text PRIMARY KEY, flow text, status text, doc jsonb,

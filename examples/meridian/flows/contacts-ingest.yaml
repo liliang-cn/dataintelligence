@@ -1,0 +1,14 @@
+# EXAMPLE workflow (Meridian) — ingest a partner CSV feed with a human gate.
+# Composed from generic primitives; no platform code involved.
+name: contacts-ingest
+steps:
+  - name: ingest
+    type: ingest
+    source: contacts_csv
+    table: _src_contacts
+  - name: review
+    type: human
+  - name: verify
+    type: sql
+    do: "DROP TABLE IF EXISTS _contacts_verified; CREATE TABLE _contacts_verified AS SELECT count(*) AS rows FROM _src_contacts"
+    undo: "DROP TABLE IF EXISTS _contacts_verified"

@@ -1,0 +1,76 @@
+# Diverse enterprise source systems for the platform's generic connectors.
+# These are neutral infra (plain databases/brokers); what makes them a specific
+# integration is the data seeded by an example (see examples/meridian/).
+#
+#   cd deploy/sources && docker compose up -d
+services:
+  # Online-channel OLTP (e.g. the e-commerce app's own DB).
+  mysql:
+    image: mysql:8.4
+    container_name: src-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: channel
+      MYSQL_USER: channel
+      MYSQL_PASSWORD: channelpw
+    ports: ["33106:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Document store (e.g. product reviews / event documents).
+  mongo:
+    image: mongo:7
+    container_name: src-mongo
+    ports: ["37017:27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Key-value cache / real-time store (e.g. live inventory counters).
+  redis:
+    image: redis:7
+    container_name: src-redis
+    ports: ["36379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Object storage / data lake (e.g. supplier price-list file drops). S3-compatible.
+  minio:
+    image: minio/minio:latest
+    container_name: src-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["39002:9000", "39092:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Event streaming (Kafka API) — e.g. order/clickstream events.
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: src-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:39094
+    ports: ["39094:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
