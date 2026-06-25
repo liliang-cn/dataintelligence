@@ -1,0 +1,112 @@
+# NL evaluation set. Labeled questions mined from how people
+# actually ask, stratified by category and including governance probes. Each case
+# is graded on three axes:
+#   - semantic match : grounding picks the right metric(s) + dimension(s)
+#   - execution      : the governed query runs without error
+#   - result match   : the number(s) equal a hand-written control query
+# Governance probes assert an unauthorized metric is REFUSED, not answered.
+#
+# `control` is the source of truth for the number — never a hardcoded value — so
+# the set stays correct as the seed data evolves.
+
+cases:
+  # --- simple: one measure, no slice ---
+  - name: total_revenue_overall
+    question: "what is total revenue"
+    category: simple
+    expect_metrics: [total_revenue]
+    control: "SELECT sum(quantity*unit_price) FROM order_items"
+
+  - name: units_sold_overall
+    question: "how many units sold"
+    category: simple
+    expect_metrics: [units_sold]
+    control: "SELECT sum(quantity) FROM order_items"
+
+  - name: order_count_overall
+    question: "number of orders"
+    category: simple
+    expect_metrics: [order_count]
+    control: "SELECT count(DISTINCT order_id) FROM orders"
+
+  - name: refund_total_overall
+    question: "total refunds"
+    category: simple
+    expect_metrics: [refund_total]
+    control: "SELECT sum(refund_amount) FROM refunds"
+
+  # --- ratio: never summed ---
+  - name: aov_overall
+    question: "average order value"
+    category: ratio
+    expect_metrics: [avg_order_value]
+    control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)::numeric / nullif((SELECT count(DISTINCT order_id) FROM orders),0)"
+
+  # --- grouped: measure sliced by a reachable dimension ---
+  - name: revenue_by_region
+    question: "revenue by store region"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [store_region]
+    control: |
+      SELECT s.region, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi
+      JOIN orders o ON oi.order_id=o.order_id
+      JOIN stores s ON o.store_id=s.store_id
+      GROUP BY s.region
+
+  - name: units_by_category
+    question: "units sold by product category"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [product_category]
+    control: |
+      SELECT p.category, sum(oi.quantity)
+      FROM order_items oi
+      JOIN products p ON oi.product_id=p.product_id
+      GROUP BY p.category
+
+  - name: orders_by_segment
+    question: "order count by customer segment"
+    category: grouped
+    expect_metrics: [order_count]
+    expect_dims: [customer_segment]
+    control: |
+      SELECT c.segment, count(DISTINCT o.order_id)
+      FROM orders o
+      JOIN customers c ON o.customer_id=c.customer_id
+      GROUP BY c.segment
+
+  # --- time: sliced by the time dimension ---
+  - name: revenue_by_date
+    question: "total revenue by order date"
+    category: time
+    expect_metrics: [total_revenue]
+    expect_dims: [order_date]
+    control: |
+      SELECT o.order_date, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi
+      JOIN orders o ON oi.order_id=o.order_id
+      GROUP BY o.order_date
+
+  # --- governance probe: net_revenue is finance/admin only ---
+  - name: net_revenue_refused_for_analyst
+    question: "what is net revenue"
+    category: governance
+    role: analyst
+    expect_metrics: [net_revenue]
+    expect_refused: true
+
+  - name: net_revenue_allowed_for_finance
+    question: "what is net revenue"
+    category: governance
+    role: finance
+    expect_metrics: [net_revenue]
+    control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"
+
+  # --- ambiguous: requires the LLM to ask back (skipped offline) ---
+  - name: ambiguous_numbers
+    question: "show me the numbers"
+    category: ambiguous
+    needs_llm: true
+    expect_clarify: true

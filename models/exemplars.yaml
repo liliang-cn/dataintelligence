@@ -1,0 +1,38 @@
+# Few-shot exemplar bank: (question → semantic query)
+# pairs. The grounder retrieves the most similar few and injects them into the LLM
+# prompt so it generalizes from patterns. Diversity beats volume — keep one clear
+# example per shape; promote every fixed miss into this file via `di exemplar -add`.
+
+exemplars:
+  - question: "what was our gross sales last quarter"
+    metrics: [total_revenue]
+    time_grain: quarter
+
+  - question: "net revenue by region"
+    metrics: [net_revenue]
+    group_by: [store_region]
+
+  - question: "how many items did we move per category"
+    metrics: [units_sold]
+    group_by: [product_category]
+
+  - question: "average ticket size by customer segment"
+    metrics: [avg_order_value]
+    group_by: [customer_segment]
+
+  - question: "running total of sales over time"
+    metrics: [revenue_cumulative]
+    group_by: [order_date]
+
+  - question: "month over month revenue change"
+    metrics: [revenue_delta]
+    group_by: [order_date]
+    time_grain: month
+
+  - question: "how many orders did each store type get"
+    metrics: [order_count]
+    group_by: [store_type]
+
+  - question: "total returns by supplier country"
+    metrics: [refund_total]
+    group_by: [supplier_country]

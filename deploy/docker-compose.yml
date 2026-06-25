@@ -1,0 +1,43 @@
+# Real warehouse for the platform: Postgres with the Meridian Retail star schema.
+# Schema + seed in ./schema are auto-applied on first init.
+#
+#   cd deploy && docker compose up -d
+#   DSN: postgres://meridian:meridian@localhost:39632/meridian?sslmode=disable
+services:
+  warehouse:
+    image: postgres:16
+    container_name: meridian-warehouse
+    environment:
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: meridian
+      POSTGRES_DB: meridian
+    ports:
+      - "39632:5432" # random high host port (5432 inside)
+    volumes:
+      - ./schema:/docker-entrypoint-initdb.d:ro
+      - meridian-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meridian -d meridian"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Real Elasticsearch as a Destination (ES sink). Single-node, security off (local).
+  #   ES URL: http://localhost:39200
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: meridian-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "39200:9200" # random high host port
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+volumes:
+  meridian-data:
