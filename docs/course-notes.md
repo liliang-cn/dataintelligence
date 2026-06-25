@@ -310,7 +310,7 @@ From one query to a guided multi-step thread.
 
 ## Module 19. Agent Patterns (and When NOT to Use Them)
 
-> **Status:** 🟡 Mostly done — write-back propose-approve via flow + **conversational BI** (`di chat`: read-only, governed, per-turn state echo as a receipt). Missing: scheduled/triggered agents. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — **conversational BI** (`di chat`) + **production write-back** (`writeback/`, `di propose/approve/reject/revert`): NL → **typed** change proposal (never raw SQL) confined to a **writable allowlist** (`models/writeback.yaml`), dry-run with before-image + affected-row count, **propose→approve→commit** with **separation of duties** (proposer ≠ approver, role-gated), parameterized SQL + red-line wall + max-affected cap, **atomic apply + rollback from before-image**, full audit — covers the whiteboard's **CRUD gen** (insert/update/delete) AND **transform gen** (NL → compile-validated metric merged into the model with backup). Verified live: UPDATE/INSERT/DELETE + revert + a generated `avg_refund_per_order` metric. Missing: scheduled/triggered agents. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 81. **Conversational BI** — a read-only chat agent (`list_metrics`/`query_metric`/`describe_metric`) that echoes a "receipt" (metric def + filters + show-SQL); resolve identity before any query.
 82. **Scheduled and Triggered Agents** — unattended raises the stakes (more guardrails); run a pinned, eval-covered question list; triggers only **explain + escalate**, never act; idempotency + cost caps + debounce.

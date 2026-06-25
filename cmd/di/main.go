@@ -43,6 +43,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/nodes"
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/warehouse"
+	"github.com/liliang-cn/dataintelligence/writeback"
 )
 
 const defaultDSN = "postgres://meridian:meridian@localhost:39632/meridian?sslmode=disable"
@@ -65,6 +66,16 @@ func main() {
 		runToken(os.Args[2:])
 	case "obo":
 		runOBO(os.Args[2:])
+	case "propose":
+		runPropose(os.Args[2:])
+	case "proposals":
+		runProposals(os.Args[2:])
+	case "approve":
+		runWriteDecision("approve", os.Args[2:])
+	case "reject":
+		runWriteDecision("reject", os.Args[2:])
+	case "revert":
+		runWriteDecision("revert", os.Args[2:])
 	case "flow":
 		runFlow(os.Args[2:])
 	case "node":
@@ -90,7 +101,7 @@ func main() {
 	case "cdc":
 		runCDC(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, ingest, mcp, token, obo, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
 		os.Exit(2)
 	}
 }
@@ -848,6 +859,168 @@ func writeFile(path string, b []byte) {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		fail(err)
 	}
+}
+
+// openWriteback builds the write-back engine over the warehouse + allowlist.
+func openWriteback(ctx context.Context, model, dsn, schemaPath string) (*engine.Engine, *writeback.Engine) {
+	eng, err := engine.New(ctx, model, dsn)
+	if err != nil {
+		fail(err)
+	}
+	sch, err := writeback.LoadSchema(schemaPath)
+	if err != nil {
+		fail(err)
+	}
+	return eng, &writeback.Engine{WH: eng.WH, Schema: sch, ModelPath: model}
+}
+
+// runPropose: NL → typed change proposal (generated, validated, dry-run, persisted
+// pending). Nothing is applied — it must be approved by a different principal.
+func runPropose(argv []string) {
+	fs := flag.NewFlagSet("propose", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	schemaPath := fs.String("writeback", "models/writeback.yaml", "write-back allowlist YAML")
+	role := fs.String("role", "analyst", "proposer role")
+	_ = fs.Parse(argv)
+	question := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if question == "" {
+		fmt.Fprintln(os.Stderr, `di propose "mark order 1001 as refunded"`)
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	eng, wb := openWriteback(ctx, *model, *dsn, *schemaPath)
+	defer eng.Close()
+
+	gen, err := writeback.NewGenerator(wb.Schema)
+	if err != nil {
+		fail(fmt.Errorf("propose needs an LLM (set LLM_*): %w", err))
+	}
+	catalog := metricCatalog(eng)
+	prop, err := gen.Generate(ctx, question, catalog)
+	if err != nil {
+		fail(err)
+	}
+	saved, err := wb.Propose(ctx, writeback.Principal{User: "cli", Role: *role}, prop)
+	if err != nil {
+		fail(err)
+	}
+	printProposal(saved)
+	fmt.Fprintf(os.Stderr, "\nproposed %s (pending). Approve with: di approve -role <approver> %s\n", saved.ID, saved.ID)
+}
+
+func runProposals(argv []string) {
+	fs := flag.NewFlagSet("proposals", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	schemaPath := fs.String("writeback", "models/writeback.yaml", "write-back allowlist YAML")
+	_ = fs.Parse(argv)
+	ctx := context.Background()
+	eng, wb := openWriteback(ctx, *model, *dsn, *schemaPath)
+	defer eng.Close()
+
+	if id := strings.TrimSpace(strings.Join(fs.Args(), " ")); id != "" {
+		prop, err := wb.Get(ctx, id)
+		if err != nil {
+			fail(err)
+		}
+		printProposal(prop)
+		return
+	}
+	list, err := wb.List(ctx, 50)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("%-22s %-7s %-11s %-22s %s\n", "ID", "KIND", "STATUS", "PROPOSER", "SUMMARY")
+	for _, p := range list {
+		fmt.Printf("%-22s %-7s %-11s %-22s %s\n", p.ID, p.Kind, p.Status, p.Proposer, proposalSummary(p))
+	}
+}
+
+func runWriteDecision(action string, argv []string) {
+	fs := flag.NewFlagSet(action, flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	schemaPath := fs.String("writeback", "models/writeback.yaml", "write-back allowlist YAML")
+	role := fs.String("role", "admin", "approver role")
+	_ = fs.Parse(argv)
+	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if id == "" {
+		fmt.Fprintf(os.Stderr, "di %s -role <approver> <proposal-id>\n", action)
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	eng, wb := openWriteback(ctx, *model, *dsn, *schemaPath)
+	defer eng.Close()
+	p := writeback.Principal{User: "cli", Role: *role}
+
+	var prop *writeback.Proposal
+	var err error
+	switch action {
+	case "approve":
+		prop, err = wb.Approve(ctx, p, id)
+	case "reject":
+		prop, err = wb.Reject(ctx, p, id)
+	case "revert":
+		prop, err = wb.Rollback(ctx, p, id)
+	}
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("%s → %s\n", action, prop.Status)
+	if prop.Note != "" {
+		fmt.Printf("  %s\n", prop.Note)
+	}
+}
+
+func printProposal(p *writeback.Proposal) {
+	fmt.Printf("proposal %s  [%s · %s]\n", p.ID, p.Kind, p.Status)
+	fmt.Printf("  request : %s\n", p.Question)
+	if p.Rationale != "" {
+		fmt.Printf("  rationale: %s\n", p.Rationale)
+	}
+	if p.Data != nil {
+		fmt.Printf("  change  : %s %s set=%v where=%v\n", p.Data.Op, p.Data.Table, p.Data.Set, p.Data.Where)
+	}
+	if p.Model != nil {
+		fmt.Printf("  model   : %s %s\n%s\n", p.Model.Kind, p.Model.Name, p.Model.YAML)
+	}
+	if p.Preview != nil {
+		if p.Preview.SQL != "" {
+			fmt.Printf("  sql     : %s  args=%v\n", p.Preview.SQL, p.Preview.Args)
+		}
+		fmt.Printf("  preview : affects %d row(s). %s\n", p.Preview.AffectedRows, p.Preview.Note)
+		for i, r := range p.Preview.Before {
+			if i >= 5 {
+				fmt.Printf("            … (%d more)\n", len(p.Preview.Before)-5)
+				break
+			}
+			fmt.Printf("            before: %v\n", r)
+		}
+	}
+}
+
+func proposalSummary(p *writeback.Proposal) string {
+	if p.Data != nil {
+		n := 0
+		if p.Preview != nil {
+			n = p.Preview.AffectedRows
+		}
+		return fmt.Sprintf("%s %s (%d rows)", p.Data.Op, p.Data.Table, n)
+	}
+	if p.Model != nil {
+		return fmt.Sprintf("model %s %s", p.Model.Kind, p.Model.Name)
+	}
+	return p.Question
+}
+
+func metricCatalog(eng *engine.Engine) string {
+	var b strings.Builder
+	for i := range eng.Model.Metrics {
+		m := &eng.Model.Metrics[i]
+		fmt.Fprintf(&b, "- %s: %s\n", m.Name, m.Description)
+	}
+	return b.String()
 }
 
 // runOBO demonstrates on-behalf-of identity propagation to the warehouse:

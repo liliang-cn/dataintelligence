@@ -64,6 +64,23 @@ func (w *Warehouse) Exec(ctx context.Context, query string, args ...any) (int64,
 	return n, nil
 }
 
+// Apply runs fn inside a single transaction (BEGIN → fn → COMMIT; ROLLBACK on
+// any error). It is the atomic write path used by the write-back engine: snapshot
+// the before-image, mutate, and audit all commit together or not at all.
+func (w *Warehouse) Apply(ctx context.Context, fn func(*sql.Tx) error) error {
+	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
+	defer cancel()
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (w *Warehouse) Query(ctx context.Context, query string, args ...any) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
 	defer cancel()

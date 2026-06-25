@@ -1,0 +1,52 @@
+# Write-back contract: the ONLY tables/columns/operations the AI agent may
+# propose changes to. Everything here is an allowlist — anything not declared is
+# rejected before generation even runs. Writes go through propose → approve →
+# commit with a before-image snapshot for rollback (the write-back danger zone).
+
+tables:
+  - name: orders
+    primary_key: order_id
+    allow_update: true          # correct an order's status
+    require_predicate: true     # never an unbounded UPDATE
+    max_affected: 50            # refuse if a dry-run would touch more rows
+    columns:
+      - {name: status, type: text, enum: [completed, returned, pending, refunded]}
+
+  - name: refunds
+    primary_key: refund_id
+    allow_insert: true          # record a refund
+    max_affected: 1
+    columns:
+      - {name: refund_id,     type: int,     required: true}
+      - {name: order_id,      type: int,     required: true}
+      - {name: refund_amount, type: numeric, required: true}
+      - {name: refund_date,   type: date,    required: true}
+
+  - name: customers
+    primary_key: customer_id
+    allow_update: true          # data correction (email/segment/tier)
+    require_predicate: true
+    max_affected: 20
+    columns:
+      - {name: email,        type: text}
+      - {name: segment,      type: text, enum: [consumer, smb, enterprise]}
+      - {name: loyalty_tier, type: text, enum: [bronze, silver, gold, platinum]}
+
+  - name: stores
+    primary_key: store_id
+    allow_insert: true
+    allow_update: true
+    require_predicate: true
+    max_affected: 10
+    columns:
+      - {name: store_id,   type: int,  required: true}
+      - {name: store_name, type: text, required: true}
+      - {name: region,     type: text, required: true}
+      - {name: city,       type: text, required: true}
+      - {name: store_type, type: text, enum: [flagship, standard, outlet], required: true}
+
+# Roles allowed to propose vs approve+commit. Proposer ≠ approver is enforced
+# (separation of duties), regardless of these lists.
+governance:
+  proposer_roles: [analyst, manager, finance, admin]
+  approver_roles: [admin, manager]
