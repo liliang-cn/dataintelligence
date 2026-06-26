@@ -2,7 +2,7 @@
 <div class="max-w-3xl mx-auto space-y-4">
   <div>
     <h1 class="text-lg font-semibold flex items-center gap-2">Copilot <span class="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent">agent-go</span></h1>
-    <p class="text-sm text-muted">An autonomous agent that calls governed platform tools (describe · health_check · list_metrics · get_dimensions · query_metric) to answer and recommend.</p>
+    <p class="text-sm text-muted">An autonomous agent that calls governed platform tools to answer and recommend — live.</p>
   </div>
 
   {{if not .Enabled}}
@@ -10,24 +10,64 @@
     Copilot is disabled. Set <code class="text-accent">LLM_BASE_URL / LLM_API_KEY / LLM_MODEL</code> and restart <code>di serve</code>.
   </div>
   {{else}}
-  <form hx-post="/ui/copilot/ask" hx-target="#cop-result" hx-swap="innerHTML"
-        class="card bg-panel rounded-2xl ring-1 ring-line p-4 space-y-3">
+  <form onsubmit="return runCopilot(event)" class="card bg-panel rounded-2xl ring-1 ring-line p-4 space-y-3">
     <textarea name="goal" rows="3" class="w-full bg-ink ring-1 ring-line rounded-lg px-3 py-2 text-sm"
-      placeholder="e.g. Health-check the warehouse, then tell me which region has the highest net revenue and recommend a fix.">Describe this warehouse, run a health check for cross-source conflicts, answer which store region has the highest net revenue, then recommend the single highest-priority governed fix.</textarea>
+      placeholder="Ask the agent…">Describe this warehouse, run a health check for cross-source conflicts, answer which store region has the highest net revenue, then recommend the single highest-priority governed fix.</textarea>
     <div class="flex flex-wrap gap-2">
       <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
         class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Run a health check and triage the worst conflict.</button>
       <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
         class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Revenue and units sold by product category.</button>
-      <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
-        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">What's net revenue by region, and is it trustworthy given data conflicts?</button>
     </div>
-    <button class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 transition"
-            hx-indicator="#cop-spin">Run agent</button>
-    <div id="cop-spin" class="htmx-indicator text-center text-sm text-muted">🧠 the agent is calling tools… (can take ~10–60s)</div>
+    <button id="cop-run" class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 transition">Run agent</button>
   </form>
 
-  <div id="cop-result"></div>
+  <!-- live tool log -->
+  <div id="cop-log" class="card bg-panel rounded-2xl ring-1 ring-line p-4 space-y-2 hidden">
+    <div class="text-xs uppercase tracking-wide text-muted">agent activity</div>
+    <div id="cop-steps" class="space-y-1.5 text-sm"></div>
+  </div>
+
+  <!-- final answer -->
+  <div id="cop-answer"></div>
+
+  <script>
+    function stepRow(label){
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      row.innerHTML = '<span class="spin h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin inline-block"></span><span>'+label+'</span>';
+      return row;
+    }
+    function runCopilot(e){
+      e.preventDefault();
+      const goal = e.target.querySelector('textarea').value.trim();
+      if(!goal) return false;
+      const btn = document.getElementById('cop-run'); btn.disabled = true; btn.textContent = 'running…';
+      const log = document.getElementById('cop-log'); const steps = document.getElementById('cop-steps');
+      const ans = document.getElementById('cop-answer');
+      steps.innerHTML=''; ans.innerHTML=''; log.classList.remove('hidden');
+      const open = {};
+      const es = new EventSource('/ui/copilot/stream?goal='+encodeURIComponent(goal));
+      es.onmessage = (m) => {
+        const ev = JSON.parse(m.data);
+        if(ev.kind==='tool_call'){
+          const row = stepRow('calling <span class="text-accent font-medium">'+ev.tool+'</span> …');
+          steps.appendChild(row); open[ev.tool]=row;
+          if(window.gsap) gsap.from(row,{opacity:0,x:-8,duration:0.25});
+        } else if(ev.kind==='tool_result'){
+          const row = open[ev.tool];
+          if(row){ row.querySelector('.spin').outerHTML='<span class="text-emerald-400">✓</span>'; }
+        } else if(ev.kind==='complete'){
+          es.close(); btn.disabled=false; btn.textContent='Run agent';
+          ans.innerHTML='<div class="card bg-panel rounded-2xl ring-1 ring-line p-4 sm:p-5 text-sm leading-relaxed whitespace-pre-wrap break-words"></div>';
+          ans.firstChild.textContent = ev.text || '(no answer)';
+          if(window.gsap) gsap.from(ans.firstChild,{opacity:0,y:12,duration:0.4});
+        }
+      };
+      es.onerror = () => { es.close(); btn.disabled=false; btn.textContent='Run agent'; };
+      return false;
+    }
+  </script>
   {{end}}
 </div>
 {{template "foot" .}}

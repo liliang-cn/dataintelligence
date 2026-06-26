@@ -6,6 +6,7 @@ package ui
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -63,6 +64,37 @@ func (u *UI) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/traces", u.traces)
 	mux.HandleFunc("GET /ui/copilot", u.copilotPage)
 	mux.HandleFunc("POST /ui/copilot/ask", u.copilotAsk)
+	mux.HandleFunc("GET /ui/copilot/stream", u.copilotStream)
+}
+
+// copilotStream runs the agent and streams its tool calls live over SSE.
+func (u *UI) copilotStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	send := func(ev copilot.StreamEvent) {
+		b, _ := json.Marshal(ev)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+	if u.cop == nil {
+		send(copilot.StreamEvent{Kind: "complete", Text: "Copilot disabled — set LLM_* and restart."})
+		return
+	}
+	goal := r.URL.Query().Get("goal")
+	if goal == "" {
+		send(copilot.StreamEvent{Kind: "complete", Text: "ask something"})
+		return
+	}
+	if _, err := u.cop.Stream(r.Context(), goal, send); err != nil {
+		send(copilot.StreamEvent{Kind: "complete", Text: "error: " + err.Error()})
+	}
 }
 
 // --- Copilot (agent-go) ---

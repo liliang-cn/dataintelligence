@@ -65,6 +65,48 @@ func New(eng *engine.Engine, pol governance.Policy, checksPath string) (*Agent, 
 
 func (a *Agent) Close() error { return a.svc.Close() }
 
+// StreamEvent is a progress event during a streaming run (UI-facing, no agent-go
+// types leak out).
+type StreamEvent struct {
+	Kind string `json:"kind"` // tool_call | tool_result | thinking | complete
+	Tool string `json:"tool,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+// Stream runs the agent and calls emit for each progress event (tool calls,
+// thinking, completion) as it happens — for live SSE in the console. Returns the
+// final synthesized result.
+func (a *Agent) Stream(ctx context.Context, goal string, emit func(StreamEvent)) (*Result, error) {
+	ch, err := a.svc.RunStream(ctx, goal)
+	if err != nil {
+		return nil, err
+	}
+	var answer, partial string
+	var tools []string
+	calls := 0
+	for ev := range ch {
+		switch ev.Type {
+		case agentpkg.EventTypeToolCall:
+			calls++
+			tools = append(tools, ev.ToolName)
+			emit(StreamEvent{Kind: "tool_call", Tool: ev.ToolName})
+		case agentpkg.EventTypeToolResult:
+			emit(StreamEvent{Kind: "tool_result", Tool: ev.ToolName})
+		case agentpkg.EventTypeThinking:
+			emit(StreamEvent{Kind: "thinking", Text: ev.Content})
+		case agentpkg.EventTypePartial:
+			partial += ev.Content
+		case agentpkg.EventTypeComplete:
+			answer = ev.Content
+		}
+	}
+	if answer == "" {
+		answer = partial
+	}
+	emit(StreamEvent{Kind: "complete", Text: answer})
+	return &Result{Answer: answer, Tools: tools, ToolCalls: calls}, nil
+}
+
 // Run executes the agent loop for a goal and returns the synthesized result.
 func (a *Agent) Run(ctx context.Context, goal string) (*Result, error) {
 	res, err := a.svc.Chat(ctx, goal)
