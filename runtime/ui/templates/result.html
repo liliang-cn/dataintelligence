@@ -5,29 +5,29 @@
   <div class="text-xs text-rose-400/70 mt-2">role: {{.Role}} — governance enforces RBAC before any SQL runs.</div>
 </div>
 {{else}}
-<div class="card bg-panel rounded-2xl ring-1 ring-slate-800 overflow-hidden">
-  <div class="flex flex-wrap items-center gap-2 px-4 sm:px-5 py-3 border-b border-slate-800">
+<div class="card bg-panel rounded-2xl ring-1 ring-line overflow-hidden">
+  <div class="flex flex-wrap items-center gap-2 px-4 sm:px-5 py-3 border-b border-line">
     <span class="text-sm font-medium">{{len .Rows}} row(s)</span>
-    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">role: {{.Role}}</span>
-    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">~{{.EstBytes}} B est</span>
-    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{.ExecMs}} ms</span>
-    <span class="w-full sm:w-auto sm:ml-auto text-[11px] text-slate-600 truncate">{{.TraceID}}</span>
+    <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted">role: {{.Role}}</span>
+    <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted">~{{.EstBytes}} B est</span>
+    <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted">{{.ExecMs}} ms</span>
+    <span class="w-full sm:w-auto sm:ml-auto text-[11px] text-muted truncate">{{.TraceID}}</span>
   </div>
 
   <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
     <table class="w-full text-sm whitespace-nowrap">
-      <thead class="text-left text-xs uppercase tracking-wide text-slate-500">
+      <thead class="text-left text-xs uppercase tracking-wide text-muted">
         <tr>{{range .Columns}}<th class="px-4 sm:px-5 py-2 font-medium">{{.}}</th>{{end}}</tr>
       </thead>
-      <tbody class="divide-y divide-slate-800/70">
-        {{range .Rows}}<tr class="hover:bg-slate-800/30">{{range .}}<td class="px-4 sm:px-5 py-2 tabular-nums">{{.}}</td>{{end}}</tr>{{end}}
+      <tbody class="divide-y divide-line/70">
+        {{range .Rows}}<tr class="hover:bg-line/30">{{range .}}<td class="px-4 sm:px-5 py-2 tabular-nums">{{.}}</td>{{end}}</tr>{{end}}
       </tbody>
     </table>
   </div>
 
-  <details class="border-t border-slate-800" x-data>
-    <summary class="px-4 sm:px-5 py-2 text-xs text-slate-500 cursor-pointer hover:text-accent">compiled SQL</summary>
-    <pre class="px-4 sm:px-5 py-3 text-xs text-slate-400 overflow-x-auto bg-ink/60"><code>{{.SQL}}</code></pre>
+  <details class="border-t border-line" x-data>
+    <summary class="px-4 sm:px-5 py-2 text-xs text-muted cursor-pointer hover:text-accent">compiled SQL</summary>
+    <pre class="px-4 sm:px-5 py-3 text-xs text-muted overflow-x-auto bg-ink/60"><code>{{.SQL}}</code></pre>
   </details>
 </div>
 {{end}}

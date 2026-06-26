@@ -4,31 +4,31 @@
 <div class="card bg-rose-950/40 ring-1 ring-rose-800 rounded-2xl p-5 text-rose-300 text-sm">{{.Error}}</div>
 {{else if .Runs}}
 {{$latest := index .Runs 0}}
-<div class="card bg-panel rounded-2xl ring-1 ring-slate-800 p-5 flex items-center gap-6">
+<div class="card bg-panel rounded-2xl ring-1 ring-line p-5 flex items-center gap-6">
   <div>
     <div class="text-4xl font-bold tabular-nums text-accent">{{$latest.AccPct}}</div>
-    <div class="text-xs text-slate-500 mt-1">latest accuracy</div>
+    <div class="text-xs text-muted mt-1">latest accuracy</div>
   </div>
-  <div class="text-sm text-slate-400">
+  <div class="text-sm text-muted">
     <div>{{$latest.Passed}} / {{$latest.Total}} cases passed</div>
-    <div class="text-xs text-slate-600">{{$latest.At}}</div>
+    <div class="text-xs text-muted">{{$latest.At}}</div>
   </div>
 </div>
 
-<div class="card bg-panel rounded-2xl ring-1 ring-slate-800 overflow-hidden">
-  <div class="px-4 sm:px-5 py-3 border-b border-slate-800 text-sm font-medium">Run history</div>
+<div class="card bg-panel rounded-2xl ring-1 ring-line overflow-hidden">
+  <div class="px-4 sm:px-5 py-3 border-b border-line text-sm font-medium">Run history</div>
   <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
     <table class="w-full text-sm">
-      <thead class="text-left text-xs uppercase tracking-wide text-slate-500">
+      <thead class="text-left text-xs uppercase tracking-wide text-muted">
         <tr><th class="px-4 sm:px-5 py-2">run</th><th class="px-4 sm:px-5 py-2">accuracy</th><th class="px-4 sm:px-5 py-2">passed</th><th class="px-4 sm:px-5 py-2">at</th></tr>
       </thead>
-      <tbody class="divide-y divide-slate-800/70">
+      <tbody class="divide-y divide-line/70">
         {{range .Runs}}
-        <tr class="hover:bg-slate-800/30">
-          <td class="px-4 sm:px-5 py-2 text-xs text-slate-500">{{.RunID}}</td>
+        <tr class="hover:bg-line/30">
+          <td class="px-4 sm:px-5 py-2 text-xs text-muted">{{.RunID}}</td>
           <td class="px-4 sm:px-5 py-2 tabular-nums">{{.AccPct}}</td>
           <td class="px-4 sm:px-5 py-2 tabular-nums">{{.Passed}}/{{.Total}}</td>
-          <td class="px-4 sm:px-5 py-2 text-xs text-slate-500">{{.At}}</td>
+          <td class="px-4 sm:px-5 py-2 text-xs text-muted">{{.At}}</td>
         </tr>
         {{end}}
       </tbody>
@@ -36,7 +36,7 @@
   </div>
 </div>
 {{else}}
-<div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-slate-800 p-10 text-center text-slate-500">
+<div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-line p-10 text-center text-muted">
   No eval runs yet. Run <code class="text-accent">di nleval</code> to populate the accuracy dashboard.
 </div>
 {{end}}

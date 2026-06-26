@@ -1,18 +1,18 @@
 {{if .Runs}}
 <div class="space-y-3">
   {{range .Runs}}
-  <div class="card bg-panel rounded-2xl ring-1 ring-slate-800 p-4">
+  <div class="card bg-panel rounded-2xl ring-1 ring-line p-4">
     <div class="flex flex-wrap items-center gap-2">
       <span class="font-medium">{{.Flow}}</span>
-      <span class="text-xs text-slate-600">{{.ID}}</span>
+      <span class="text-xs text-muted">{{.ID}}</span>
       {{$s := .Status}}
       <span class="text-xs px-2 py-0.5 rounded-full
         {{if eq $s "completed"}}bg-emerald-900/50 text-emerald-300
         {{else if eq $s "awaiting_approval"}}bg-amber-900/50 text-amber-300
-        {{else if eq $s "rolled_back"}}bg-slate-700 text-slate-300
+        {{else if eq $s "rolled_back"}}bg-line text-txt
         {{else if eq $s "rejected"}}bg-rose-900/50 text-rose-300
         {{else if eq $s "failed"}}bg-rose-900/50 text-rose-300
-        {{else}}bg-slate-800 text-slate-400{{end}}">{{$s}}</span>
+        {{else}}bg-line text-muted{{end}}">{{$s}}</span>
 
       <div class="ml-auto flex gap-2">
         {{if eq $s "awaiting_approval"}}
@@ -23,7 +23,7 @@
         {{else if eq $s "completed"}}
           <button hx-post="/ui/runs/{{.ID}}/rollback" hx-target="#runs" hx-swap="innerHTML"
                   hx-confirm="Roll back this run?"
-                  class="text-xs px-3 py-1.5 rounded-lg ring-1 ring-slate-700 text-slate-300 hover:bg-slate-800">rollback</button>
+                  class="text-xs px-3 py-1.5 rounded-lg ring-1 ring-line text-txt hover:bg-line">rollback</button>
         {{end}}
       </div>
     </div>
@@ -31,7 +31,7 @@
     {{if .Steps}}
     <div class="mt-3 flex flex-wrap gap-1.5">
       {{range .Steps}}
-      <span class="text-[11px] px-2 py-0.5 rounded ring-1 ring-slate-800 text-slate-400">{{.Name}}<span class="text-slate-600"> · {{.Status}}</span></span>
+      <span class="text-[11px] px-2 py-0.5 rounded ring-1 ring-line text-muted">{{.Name}}<span class="text-muted"> · {{.Status}}</span></span>
       {{end}}
     </div>
     {{end}}
@@ -39,7 +39,7 @@
   {{end}}
 </div>
 {{else}}
-<div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-slate-800 p-10 text-center text-slate-500">
+<div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-line p-10 text-center text-muted">
   No runs yet. Start one with <code class="text-accent">di flow run &lt;name&gt;</code> or a write-back proposal.
 </div>
 {{end}}

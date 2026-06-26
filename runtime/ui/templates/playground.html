@@ -2,25 +2,25 @@
 <div class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4 sm:gap-6">
   <!-- query builder -->
   <form hx-post="/ui/query" hx-target="#result" hx-swap="innerHTML"
-        class="card bg-panel rounded-2xl ring-1 ring-slate-800 p-4 sm:p-5 space-y-5 self-start">
+        class="card bg-panel rounded-2xl ring-1 ring-line p-4 sm:p-5 space-y-5 self-start">
     <div>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Metrics</div>
+      <div class="text-xs uppercase tracking-wide text-muted mb-2">Metrics</div>
       <div class="space-y-1 max-h-72 sm:max-h-60 overflow-auto pr-1">
         {{range .Metrics}}
-        <label class="flex items-start gap-2.5 text-sm hover:bg-slate-800/40 rounded-lg px-2 py-2 sm:py-1 cursor-pointer">
+        <label class="flex items-start gap-2.5 text-sm hover:bg-line/40 rounded-lg px-2 py-2 sm:py-1 cursor-pointer">
           <input type="checkbox" name="metrics" value="{{.Name}}" class="mt-1 h-4 w-4 accent-accent">
           <span><span class="font-medium">{{.Name}}</span>
-            {{if .Description}}<span class="block text-xs text-slate-500">{{.Description}}</span>{{end}}</span>
+            {{if .Description}}<span class="block text-xs text-muted">{{.Description}}</span>{{end}}</span>
         </label>
         {{end}}
       </div>
     </div>
 
     <div>
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Group by</div>
+      <div class="text-xs uppercase tracking-wide text-muted mb-2">Group by</div>
       <div class="flex flex-wrap gap-2">
         {{range .Dimensions}}
-        <label class="text-xs px-3 py-1.5 sm:py-1 rounded-full ring-1 ring-slate-700 hover:ring-accent cursor-pointer select-none has-[:checked]:ring-accent has-[:checked]:bg-accent/10">
+        <label class="text-xs px-3 py-1.5 sm:py-1 rounded-full ring-1 ring-line hover:ring-accent cursor-pointer select-none has-[:checked]:ring-accent has-[:checked]:bg-accent/10">
           <input type="checkbox" name="dims" value="{{.}}" class="hidden peer">
           <span class="peer-checked:text-accent">{{.}}</span>
         </label>
@@ -30,14 +30,14 @@
 
     <div class="grid grid-cols-2 gap-3">
       <label class="text-sm">
-        <span class="block text-xs uppercase tracking-wide text-slate-500 mb-1">Role</span>
-        <select name="role" class="w-full bg-ink ring-1 ring-slate-700 rounded-lg px-2 py-1.5 text-sm">
+        <span class="block text-xs uppercase tracking-wide text-muted mb-1">Role</span>
+        <select name="role" class="w-full bg-ink ring-1 ring-line rounded-lg px-2 py-1.5 text-sm">
           {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </label>
       <label class="text-sm">
-        <span class="block text-xs uppercase tracking-wide text-slate-500 mb-1">Time grain</span>
-        <select name="grain" class="w-full bg-ink ring-1 ring-slate-700 rounded-lg px-2 py-1.5 text-sm">
+        <span class="block text-xs uppercase tracking-wide text-muted mb-1">Time grain</span>
+        <select name="grain" class="w-full bg-ink ring-1 ring-line rounded-lg px-2 py-1.5 text-sm">
           <option value="">none</option><option>day</option><option>month</option><option>quarter</option><option>year</option>
         </select>
       </label>
@@ -45,12 +45,12 @@
 
     <button class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 active:brightness-95 transition"
             hx-indicator="#spin">Run query</button>
-    <div id="spin" class="htmx-indicator text-center text-xs text-slate-500">running…</div>
+    <div id="spin" class="htmx-indicator text-center text-xs text-muted">running…</div>
   </form>
 
   <!-- result -->
   <section id="result" class="min-h-[200px]">
-    <div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-slate-800 p-10 text-center text-slate-500">
+    <div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-line p-10 text-center text-muted">
       Pick metrics and Run. The query is compiled to fan-out-safe SQL and governed by role.
     </div>
   </section>

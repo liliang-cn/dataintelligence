@@ -8,8 +8,20 @@
   <script src="/ui/static/htmx.min.js" defer></script>
   <script src="/ui/static/alpine.min.js" defer></script>
   <script src="/ui/static/gsap.min.js"></script>
+  <!-- set theme before paint to avoid a flash -->
+  <script>(function(){ if ((localStorage.getItem('di-theme')||'dark')==='light') document.documentElement.classList.add('light'); })();</script>
+  <style>
+    :root { --bg:#0b0f17; --panel:#121826; --txt:#e2e8f0; --muted:#94a3b8; --line:#1e293b; --accent:#6ea8fe; }
+    html.light { --bg:#f6f7f9; --panel:#ffffff; --txt:#0b1220; --muted:#64748b; --line:#e2e8f0; --accent:#2563eb; }
+    .theme-sun { display: none; } html.light .theme-sun { display: inline; } html.light .theme-moon { display: none; }
+  </style>
   <script>
-    tailwind.config = { theme: { extend: { colors: { ink: '#0b0f17', panel: '#121826', accent: '#6ea8fe' } } } };
+    tailwind.config = { theme: { extend: { colors: {
+      ink: 'var(--bg)', panel: 'var(--panel)', accent: 'var(--accent)',
+      txt: 'var(--txt)', muted: 'var(--muted)', line: 'var(--line)',
+    } } } };
+    function toggleTheme(){ const h=document.documentElement; h.classList.toggle('light');
+      localStorage.setItem('di-theme', h.classList.contains('light')?'light':'dark'); }
     document.addEventListener('htmx:afterSwap', (e) => {
       gsap.from(e.target.querySelectorAll('.card'), { opacity: 0, y: 16, duration: 0.4, ease: 'power2.out' });
       gsap.from(e.target.querySelectorAll('tbody tr'), { opacity: 0, y: 8, duration: 0.3, stagger: 0.02, ease: 'power1.out', delay: 0.05 });
@@ -19,21 +31,24 @@
     });
   </script>
 </head>
-<body class="h-full bg-ink text-slate-200" style="font-family: ui-sans-serif, system-ui, -apple-system, sans-serif">
-  <header class="border-b border-slate-800 px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-ink/95 backdrop-blur z-10">
+<body class="h-full bg-ink text-txt transition-colors" style="font-family: ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <header class="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-ink/95 backdrop-blur z-10">
     <a href="/ui" class="flex items-center gap-2 shrink-0">
       <span class="h-7 w-7 rounded-lg bg-accent/20 ring-1 ring-accent/40 grid place-items-center text-accent font-bold">DI</span>
       <span class="font-semibold tracking-tight hidden sm:block">DataIntelligence</span>
     </a>
     <nav class="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
       {{$a := .Active}}
-      <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">query</a>
-      <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">model</a>
-      <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">eval</a>
-      <a href="/ui/runs" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "runs"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">runs</a>
-      <a href="/ui/traces" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "traces"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">traces</a>
+      <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">query</a>
+      <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">model</a>
+      <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">eval</a>
+      <a href="/ui/runs" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "runs"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">runs</a>
+      <a href="/ui/traces" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "traces"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">traces</a>
     </nav>
-    <a href="/v1/healthz" class="ml-auto text-xs text-slate-600 hover:text-accent shrink-0 hidden sm:block">REST /v1</a>
+    <button onclick="toggleTheme()" title="toggle theme" aria-label="toggle theme"
+            class="ml-auto shrink-0 h-8 w-8 grid place-items-center rounded-lg ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">
+      <span class="theme-moon">🌙</span><span class="theme-sun">☀️</span>
+    </button>
   </header>
   <main class="p-4 sm:p-6 space-y-4 max-w-6xl mx-auto">
 {{end}}
