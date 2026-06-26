@@ -276,7 +276,7 @@ func serveNamed(name string, s *http.Server) error {
 // buildMCPHTTPServer wires the MCP server over streamable HTTP behind bearer auth
 // (or open when verifier is nil) and continues inbound W3C traces.
 func buildMCPHTTPServer(addr string, eng *engine.Engine, verifier auth.TokenVerifier) *http.Server {
-	opts := &mcpserver.Options{Default: mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}}, Burst: 5}
+	opts := &mcpserver.Options{Default: mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}}, Burst: 5, ChecksPath: envOr("DI_CHECKS", "examples/meridian/conflicts.yaml")}
 	handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return mcpserver.NewServer(eng, opts) }, nil)
 	var h http.Handler = handler
 	if verifier != nil {
@@ -1498,8 +1498,9 @@ func runMCP(argv []string) {
 	defer eng.Close()
 
 	opts := &mcpserver.Options{
-		Default: mcpserver.Principal{User: "local", Role: *role, Scopes: []string{"metrics:read", "data:write"}},
-		RPS:     *rps, Burst: 5,
+		Default:    mcpserver.Principal{User: "local", Role: *role, Scopes: []string{"metrics:read", "data:write"}},
+		RPS:        *rps, Burst: 5,
+		ChecksPath: envOr("DI_CHECKS", "examples/meridian/conflicts.yaml"),
 	}
 
 	if *httpAddr != "" {

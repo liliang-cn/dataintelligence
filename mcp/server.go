@@ -15,6 +15,7 @@ import (
 
 	semantic "github.com/liliang-cn/semantic-go"
 
+	"github.com/liliang-cn/dataintelligence/agenttools"
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -50,6 +51,12 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "ingest_csv",
 		Description: "Ingest a CSV into a warehouse table: infer mapping, run key/data checks, land rows."},
 		s.ingestCSV)
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "describe_warehouse",
+		Description: "List the warehouse tables and their column counts."},
+		s.describeWarehouse)
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "health_check",
+		Description: "Detect cross-source data conflicts (orphans, price drift, oversell)."},
+		s.healthCheck)
 	return server
 }
 
@@ -79,16 +86,9 @@ func (s *srv) listMetrics(_ context.Context, req *mcpsdk.CallToolRequest, _ list
 	if _, deny := s.guard(req, "metrics:read"); deny != nil {
 		return deny, nil, nil
 	}
-	type info struct {
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		Synonyms    []string `json:"synonyms,omitempty"`
-	}
-	var out []info
+	out := agenttools.ListMetrics(s.eng)
 	var lines []string
-	for i := range s.eng.Model.Metrics {
-		m := &s.eng.Model.Metrics[i]
-		out = append(out, info{m.Name, m.Description, m.Synonyms})
+	for _, m := range out {
 		lines = append(lines, "- "+m.Name+": "+m.Description)
 	}
 	return textResult(strings.Join(lines, "\n")), out, nil
@@ -102,7 +102,7 @@ func (s *srv) getDimensions(_ context.Context, req *mcpsdk.CallToolRequest, in d
 	if _, deny := s.guard(req, "metrics:read"); deny != nil {
 		return deny, nil, nil
 	}
-	dims, err := s.eng.Model.DimensionsFor(in.Metric)
+	dims, err := agenttools.Dimensions(s.eng, in.Metric)
 	if err != nil {
 		return errResult(err.Error()), nil, nil
 	}
@@ -122,9 +122,9 @@ func (s *srv) queryMetric(ctx context.Context, req *mcpsdk.CallToolRequest, in q
 		return deny, nil, nil
 	}
 	// Identity propagation: the query runs AS the caller — RBAC/masking/audit apply.
-	ans, err := governance.Query(ctx, s.eng,
-		semantic.Query{Metrics: in.Metrics, GroupBy: in.GroupBy, TimeGrain: in.Grain, Limit: in.Limit},
-		governance.Principal{User: p.User, Role: p.Role}, governance.DefaultPolicy())
+	ans, err := agenttools.Query(ctx, s.eng, governance.DefaultPolicy(),
+		governance.Principal{User: p.User, Role: p.Role},
+		semantic.Query{Metrics: in.Metrics, GroupBy: in.GroupBy, TimeGrain: in.Grain, Limit: in.Limit})
 	if err != nil {
 		return errResult(err.Error()), nil, nil
 	}
@@ -156,6 +156,35 @@ func (s *srv) ingestCSV(ctx context.Context, req *mcpsdk.CallToolRequest, in ing
 	}
 	return textResult(fmt.Sprintf("ingested into %q: read=%d landed=%d skipped=%d",
 		rep.Table, rep.RowsRead, rep.RowsLanded, rep.RowsSkipped)), rep, nil
+}
+
+func (s *srv) describeWarehouse(ctx context.Context, req *mcpsdk.CallToolRequest, _ listIn) (*mcpsdk.CallToolResult, any, error) {
+	if _, deny := s.guard(req, "metrics:read"); deny != nil {
+		return deny, nil, nil
+	}
+	tables, err := agenttools.DescribeWarehouse(ctx, s.eng)
+	if err != nil {
+		return errResult(err.Error()), nil, nil
+	}
+	return textResult(strings.Join(tables, "\n")), tables, nil
+}
+
+func (s *srv) healthCheck(ctx context.Context, req *mcpsdk.CallToolRequest, _ listIn) (*mcpsdk.CallToolResult, any, error) {
+	if _, deny := s.guard(req, "metrics:read"); deny != nil {
+		return deny, nil, nil
+	}
+	if s.opts.ChecksPath == "" {
+		return errResult("health_check is not configured (no checks path)"), nil, nil
+	}
+	conflicts, err := agenttools.HealthCheck(ctx, s.eng, s.opts.ChecksPath)
+	if err != nil {
+		return errResult(err.Error()), nil, nil
+	}
+	var lines []string
+	for _, c := range conflicts {
+		lines = append(lines, fmt.Sprintf("%s [%s]: %d", c.Check, c.Severity, c.Conflicts))
+	}
+	return textResult(strings.Join(lines, "\n")), conflicts, nil
 }
 
 func textResult(s string) *mcpsdk.CallToolResult {

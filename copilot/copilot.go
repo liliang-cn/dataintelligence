@@ -15,10 +15,9 @@ import (
 	"github.com/liliang-cn/agent-go/v2/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
 
+	"github.com/liliang-cn/dataintelligence/agenttools"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
-	"github.com/liliang-cn/dataintelligence/modelgen"
-	"github.com/liliang-cn/dataintelligence/reconcile"
 )
 
 const systemPrompt = `You are the DataIntelligence copilot for a data platform. Use the tools to fulfill the goal.
@@ -121,38 +120,27 @@ func (a *Agent) Run(ctx context.Context, goal string) (*Result, error) {
 	}, nil
 }
 
+// tools wraps the shared agenttools capabilities as agent-go tools — the same
+// behavior the MCP server exposes, so internal and external agents are identical.
 func tools(eng *engine.Engine, pol governance.Policy, checksPath string) []*agentpkg.Tool {
 	return []*agentpkg.Tool{
 		agentpkg.BuildTool("describe_warehouse").
 			Description("List the warehouse tables and their column counts.").
 			Handler(func(ctx context.Context, _ map[string]any) (any, error) {
-				s, err := modelgen.Introspect(ctx, eng.WH)
-				if err != nil {
-					return nil, err
-				}
-				out := []string{}
-				for _, t := range s.Tables {
-					out = append(out, fmt.Sprintf("%s (%d cols)", t.Name, len(t.Columns)))
-				}
-				return out, nil
+				return agenttools.DescribeWarehouse(ctx, eng)
 			}).Build(),
 
 		agentpkg.BuildTool("list_metrics").
 			Description("List available semantic metrics with descriptions.").
 			Handler(func(_ context.Context, _ map[string]any) (any, error) {
-				out := []string{}
-				for i := range eng.Model.Metrics {
-					m := &eng.Model.Metrics[i]
-					out = append(out, m.Name+": "+m.Description)
-				}
-				return out, nil
+				return agenttools.ListMetrics(eng), nil
 			}).Build(),
 
 		agentpkg.BuildTool("get_dimensions").
 			Description("Valid dimensions to group a metric by WITHOUT a fan-out. Call before query_metric.").
 			Param("metric", agentpkg.TypeString, "the metric name", agentpkg.Required()).
 			Handler(func(_ context.Context, a map[string]any) (any, error) {
-				return eng.Model.DimensionsFor(fmt.Sprint(a["metric"]))
+				return agenttools.Dimensions(eng, fmt.Sprint(a["metric"]))
 			}).Build(),
 
 		agentpkg.BuildTool("query_metric").
@@ -166,7 +154,7 @@ func tools(eng *engine.Engine, pol governance.Policy, checksPath string) []*agen
 					role = "finance"
 				}
 				q := semantic.Query{Metrics: splitCSV(fmt.Sprint(a["metrics"])), GroupBy: splitCSV(fmt.Sprint(a["group_by"]))}
-				ans, err := governance.Query(ctx, eng, q, governance.Principal{User: "copilot", Role: role, Attrs: map[string]string{"region": "South"}}, pol)
+				ans, err := agenttools.Query(ctx, eng, pol, governance.Principal{User: "copilot", Role: role, Attrs: map[string]string{"region": "South"}}, q)
 				if err != nil {
 					return "refused by governance: " + err.Error(), nil
 				}
@@ -176,19 +164,7 @@ func tools(eng *engine.Engine, pol governance.Policy, checksPath string) []*agen
 		agentpkg.BuildTool("health_check").
 			Description("Detect cross-source data conflicts (orphans, price drift, oversell).").
 			Handler(func(ctx context.Context, _ map[string]any) (any, error) {
-				cs, err := reconcile.Load(checksPath)
-				if err != nil {
-					return nil, err
-				}
-				results, err := reconcile.Run(ctx, eng.WH, cs, nil)
-				if err != nil {
-					return nil, err
-				}
-				out := []map[string]any{}
-				for _, r := range results {
-					out = append(out, map[string]any{"check": r.Check.Name, "severity": r.Check.Severity, "conflicts": r.Count()})
-				}
-				return out, nil
+				return agenttools.HealthCheck(ctx, eng, checksPath)
 			}).Build(),
 	}
 }

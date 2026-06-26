@@ -30,9 +30,10 @@ func (p Principal) hasScope(s string) bool {
 
 // Options configure the server's security.
 type Options struct {
-	Default Principal // used when there is no token (local stdio)
-	RPS     float64   // per-principal rate limit (0 = off)
-	Burst   int
+	Default    Principal // used when there is no token (local stdio)
+	RPS        float64   // per-principal rate limit (0 = off)
+	Burst      int
+	ChecksPath string // conflict checks for the health_check tool (empty = disabled)
 }
 
 func defaultOptions() *Options {
