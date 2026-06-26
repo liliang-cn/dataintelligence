@@ -232,7 +232,7 @@ func runServe(argv []string) {
 	v1 := &runtime.V1{Eng: eng, Gr: gr, Pol: pol, Verify: verifier}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
-	if console, uerr := ui.New(eng, pol); uerr == nil {
+	if console, uerr := ui.New(eng, pol, fe); uerr == nil {
 		console.Mount(mux)
 	} else {
 		fmt.Fprintf(os.Stderr, "-- web console disabled: %v\n", uerr)

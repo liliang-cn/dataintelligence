@@ -1,0 +1,49 @@
+{{template "head" .}}
+<div class="flex flex-wrap items-center gap-2">
+  <h1 class="text-lg font-semibold">Semantic model</h1>
+  <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{.Entities}} entities</span>
+  <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{.Joins}} joins</span>
+  <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{len .Metrics}} metrics</span>
+  <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{len .Dimensions}} dimensions</span>
+  {{if .Issues}}<span class="text-xs px-2 py-0.5 rounded-full bg-amber-900/50 text-amber-300">{{len .Issues}} lint note(s)</span>
+  {{else}}<span class="text-xs px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-300">lint clean</span>{{end}}
+</div>
+
+{{if .Issues}}
+<div class="card bg-amber-950/30 ring-1 ring-amber-900/60 rounded-2xl p-4 text-sm space-y-1">
+  {{range .Issues}}<div class="text-amber-200/90"><span class="uppercase text-[10px] mr-2 text-amber-400">{{.Severity}}</span>{{.Target}}: {{.Message}}</div>{{end}}
+</div>
+{{end}}
+
+<div class="card bg-panel rounded-2xl ring-1 ring-slate-800 overflow-hidden">
+  <div class="px-4 sm:px-5 py-3 border-b border-slate-800 text-sm font-medium">Metrics</div>
+  <div class="overflow-x-auto" style="-webkit-overflow-scrolling:touch">
+    <table class="w-full text-sm">
+      <thead class="text-left text-xs uppercase tracking-wide text-slate-500">
+        <tr><th class="px-4 sm:px-5 py-2">name</th><th class="px-4 sm:px-5 py-2">additivity</th><th class="px-4 sm:px-5 py-2">synonyms</th><th class="px-4 sm:px-5 py-2">roles</th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-800/70">
+        {{range .Metrics}}
+        <tr class="hover:bg-slate-800/30 align-top">
+          <td class="px-4 sm:px-5 py-2"><div class="font-medium">{{.Name}}</div><div class="text-xs text-slate-500 max-w-md">{{.Description}}</div></td>
+          <td class="px-4 sm:px-5 py-2 text-xs"><span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{{.Additivity}}</span></td>
+          <td class="px-4 sm:px-5 py-2 text-xs text-slate-400">{{range .Synonyms}}<span class="mr-1">{{.}}</span>{{end}}</td>
+          <td class="px-4 sm:px-5 py-2 text-xs text-slate-400">{{if .Roles}}{{range .Roles}}<span class="mr-1 text-accent">{{.}}</span>{{end}}{{else}}—{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-panel rounded-2xl ring-1 ring-slate-800 overflow-hidden">
+  <div class="px-4 sm:px-5 py-3 border-b border-slate-800 text-sm font-medium">Dimensions</div>
+  <div class="flex flex-wrap gap-2 p-4 sm:p-5">
+    {{range .Dimensions}}
+    <span class="text-xs px-3 py-1.5 rounded-full ring-1 ring-slate-700">
+      {{.Name}} <span class="text-slate-600">· {{.Entity}} · {{.Type}}</span>
+    </span>
+    {{end}}
+  </div>
+</div>
+{{template "foot" .}}

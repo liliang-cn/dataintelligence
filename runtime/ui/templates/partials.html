@@ -1,0 +1,44 @@
+{{define "head"}}<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataIntelligence · Console</title>
+  <script src="/ui/static/tailwind.js"></script>
+  <script src="/ui/static/htmx.min.js" defer></script>
+  <script src="/ui/static/alpine.min.js" defer></script>
+  <script src="/ui/static/gsap.min.js"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { ink: '#0b0f17', panel: '#121826', accent: '#6ea8fe' } } } };
+    document.addEventListener('htmx:afterSwap', (e) => {
+      gsap.from(e.target.querySelectorAll('.card'), { opacity: 0, y: 16, duration: 0.4, ease: 'power2.out' });
+      gsap.from(e.target.querySelectorAll('tbody tr'), { opacity: 0, y: 8, duration: 0.3, stagger: 0.02, ease: 'power1.out', delay: 0.05 });
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      gsap.from('main .card', { opacity: 0, y: 16, duration: 0.4, stagger: 0.05, ease: 'power2.out' });
+    });
+  </script>
+</head>
+<body class="h-full bg-ink text-slate-200" style="font-family: ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <header class="border-b border-slate-800 px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-ink/95 backdrop-blur z-10">
+    <a href="/ui" class="flex items-center gap-2 shrink-0">
+      <span class="h-7 w-7 rounded-lg bg-accent/20 ring-1 ring-accent/40 grid place-items-center text-accent font-bold">DI</span>
+      <span class="font-semibold tracking-tight hidden sm:block">DataIntelligence</span>
+    </a>
+    <nav class="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
+      {{$a := .Active}}
+      <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">query</a>
+      <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">model</a>
+      <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">eval</a>
+      <a href="/ui/runs" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "runs"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">runs</a>
+      <a href="/ui/traces" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "traces"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-slate-400 hover:text-slate-200{{end}}">traces</a>
+    </nav>
+    <a href="/v1/healthz" class="ml-auto text-xs text-slate-600 hover:text-accent shrink-0 hidden sm:block">REST /v1</a>
+  </header>
+  <main class="p-4 sm:p-6 space-y-4 max-w-6xl mx-auto">
+{{end}}
+
+{{define "foot"}}  </main>
+</body>
+</html>
+{{end}}
