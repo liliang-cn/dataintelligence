@@ -13,6 +13,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/segmentio/kafka-go v0.4.51
+	github.com/spf13/cobra v1.10.2
 	go.mongodb.org/mongo-driver v1.17.9
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
@@ -85,6 +86,7 @@ require (
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -115,6 +117,7 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/cast v1.9.2 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

@@ -33,6 +33,7 @@ import (
 	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 	"github.com/liliang-cn/agent-go/v2/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
+	"github.com/spf13/cobra"
 
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/convo"
@@ -59,87 +60,92 @@ import (
 const defaultDSN = "postgres://meridian:meridian@localhost:39632/meridian?sslmode=disable"
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: di <query> [flags]")
-		os.Exit(2)
+	if err := rootCmd().Execute(); err != nil {
+		os.Exit(1)
 	}
-	// Real OpenTelemetry, opt-in via DI_OTEL=1 (spans are no-ops otherwise).
-	if os.Getenv("DI_OTEL") != "" {
-		if _, err := obs.InitOTel("dataintelligence"); err != nil {
-			fail(err)
+}
+
+// rootCmd builds the Cobra command tree. Each leaf wraps an existing run* handler
+// that still parses its own flags (DisableFlagParsing), so the CLI gains Cobra's
+// grouped help / version / shell completion with zero change to command behavior.
+func rootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "di",
+		Short: "DataIntelligence — governed semantic layer + MCP gateway for your warehouse",
+		Long: "DataIntelligence makes a data warehouse safe for AI agents: a semantic layer,\n" +
+			"grounded text-to-SQL, governance on every hop, and a governed MCP server.",
+		Version:       "0.1.0",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		// Real OpenTelemetry, opt-in via DI_OTEL=1 (spans are no-ops otherwise).
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			if os.Getenv("DI_OTEL") != "" {
+				if _, err := obs.InitOTel("dataintelligence"); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+
+	leaf := func(use, group, short string, run func([]string)) *cobra.Command {
+		c := &cobra.Command{
+			Use: use, Short: short, GroupID: group,
+			DisableFlagParsing: true, // each handler parses its own flags
+			Run:                func(_ *cobra.Command, args []string) { run(args) },
 		}
+		return c
 	}
-	switch os.Args[1] {
-	case "trace":
-		runTrace(os.Args[2:])
-	case "query":
-		runQuery(os.Args[2:])
-	case "ask":
-		runAsk(os.Args[2:])
-	case "ingest":
-		runIngest(os.Args[2:])
-	case "mcp":
-		runMCP(os.Args[2:])
-	case "token":
-		runToken(os.Args[2:])
-	case "obo":
-		runOBO(os.Args[2:])
-	case "propose":
-		runPropose(os.Args[2:])
-	case "proposals":
-		runProposals(os.Args[2:])
-	case "approve":
-		runWriteDecision("approve", os.Args[2:])
-	case "reject":
-		runWriteDecision("reject", os.Args[2:])
-	case "revert":
-		runWriteDecision("revert", os.Args[2:])
-	case "flow":
-		runFlow(os.Args[2:])
-	case "node":
-		runNode(os.Args[2:])
-	case "serve":
-		runServe(os.Args[2:])
-	case "eval":
-		runEval(os.Args[2:])
-	case "nleval":
-		runNLEval(os.Args[2:])
-	case "exemplar":
-		runExemplar(os.Args[2:])
-	case "chat":
-		runChat(os.Args[2:])
-	case "chain":
-		runChain(os.Args[2:])
-	case "dashboard":
-		runDashboard(os.Args[2:])
-	case "agent":
-		runAgent(os.Args[2:])
-	case "shadow":
-		runShadow(os.Args[2:])
-	case "cdc":
-		runCDC(os.Args[2:])
-	case "crm":
-		runCRM(os.Args[2:])
-	case "webhook":
-		runWebhook(os.Args[2:])
-	case "source":
-		runSource(os.Args[2:])
-	case "model":
-		runModel(os.Args[2:])
-	case "explain":
-		runExplain(os.Args[2:])
-	case "threats":
-		runThreats(os.Args[2:])
-	case "rollout":
-		runRollout(os.Args[2:])
-	case "pentest":
-		runPentest(os.Args[2:])
-	case "spend":
-		runSpend(os.Args[2:])
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, model, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
-		os.Exit(2)
-	}
+
+	root.AddGroup(
+		&cobra.Group{ID: "query", Title: "Query & explore:"},
+		&cobra.Group{ID: "model", Title: "Model & onboarding:"},
+		&cobra.Group{ID: "gov", Title: "Governance & security:"},
+		&cobra.Group{ID: "ops", Title: "Service & operations:"},
+		&cobra.Group{ID: "data", Title: "Data movement:"},
+	)
+
+	root.AddCommand(
+		// query & explore
+		leaf("query", "query", "Run a governed semantic query", runQuery),
+		leaf("ask", "query", "Ask a question in natural language", runAsk),
+		leaf("chat", "query", "Conversational BI with cross-turn memory", runChat),
+		leaf("chain", "query", "Multi-metric chained query", runChain),
+		leaf("explain", "query", "Compile a query to SQL for a dialect (no execution)", runExplain),
+		// model & onboarding
+		leaf("model", "model", "Generate (gen) or lint a semantic model", runModel),
+		leaf("exemplar", "model", "Manage the few-shot exemplar bank", runExemplar),
+		leaf("eval", "model", "Reconciliation gate (metrics vs control SQL)", runEval),
+		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
+		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
+		leaf("rollout", "model", "Version registry, canary, auto-rollback", runRollout),
+		// governance & security
+		leaf("threats", "gov", "Threat-model-as-code gate", runThreats),
+		leaf("pentest", "gov", "MCP security regression (forged-token battery)", runPentest),
+		leaf("token", "gov", "Dev token issuer (gen-key / mint)", runToken),
+		leaf("obo", "gov", "On-behalf-of identity propagation demo", runOBO),
+		leaf("spend", "gov", "Per-tenant spend ledger", runSpend),
+		leaf("trace", "gov", "OpenTelemetry trace-propagation demo", runTrace),
+		// service & operations
+		leaf("serve", "ops", "Run the service daemon (REST /v1 + MCP + /ui)", runServe),
+		leaf("mcp", "ops", "Run the MCP server (stdio or HTTP)", runMCP),
+		leaf("agent", "ops", "Run an LLM agent over the MCP tools", runAgent),
+		leaf("dashboard", "ops", "Print the execution dashboard", runDashboard),
+		leaf("flow", "ops", "Run a config-driven DataFlow saga", runFlow),
+		leaf("node", "ops", "Run a single pipeline node", runNode),
+		// data movement & write-back
+		leaf("ingest", "data", "Ingest a CSV into the warehouse", runIngest),
+		leaf("source", "data", "Read/ingest from a configured source", runSource),
+		leaf("crm", "data", "Sync from a CRM source", runCRM),
+		leaf("webhook", "data", "Run the webhook receiver", runWebhook),
+		leaf("cdc", "data", "Watch a table for changes (CDC)", runCDC),
+		leaf("propose", "data", "Propose a typed write-back change", runPropose),
+		leaf("proposals", "data", "List write-back proposals", runProposals),
+		leaf("approve", "data", "Approve a write-back proposal", func(a []string) { runWriteDecision("approve", a) }),
+		leaf("reject", "data", "Reject a write-back proposal", func(a []string) { runWriteDecision("reject", a) }),
+		leaf("revert", "data", "Revert a committed write-back", func(a []string) { runWriteDecision("revert", a) }),
+	)
+	return root
 }
 
 // runServe starts the control-plane HTTP API (execution dashboard + query +
