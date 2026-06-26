@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -41,6 +42,7 @@ import (
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
 	"github.com/liliang-cn/dataintelligence/nleval"
 	"github.com/liliang-cn/dataintelligence/nodes"
+	"github.com/liliang-cn/dataintelligence/rollout"
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 	"github.com/liliang-cn/dataintelligence/writeback"
@@ -108,6 +110,12 @@ func main() {
 		runSource(os.Args[2:])
 	case "model":
 		runModel(os.Args[2:])
+	case "threats":
+		runThreats(os.Args[2:])
+	case "rollout":
+		runRollout(os.Args[2:])
+	case "pentest":
+		runPentest(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, model, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
 		os.Exit(2)
@@ -166,6 +174,249 @@ func runModel(argv []string) {
 	if errs > 0 {
 		os.Exit(1)
 	}
+}
+
+// runPentest is the automated MCP-security regression (M17, lesson 75): it
+// fires a battery of forged tokens at the real OIDC verifier and asserts every
+// attack is rejected and the one good token is accepted. Exit 1 if any attack
+// gets through — a CI gate so a security control can never silently regress.
+func runPentest(argv []string) {
+	_ = argv // no flags; the gate is self-contained
+	ctx := context.Background()
+	const issuer, aud = "https://di-issuer.local", "warehouse"
+
+	priv, err := mcpserver.GenerateKey(2048)
+	if err != nil {
+		fail(err)
+	}
+	pubPEM, err := mcpserver.MarshalPublicKeyPEM(&priv.PublicKey)
+	if err != nil {
+		fail(err)
+	}
+	evil, _ := mcpserver.GenerateKey(2048) // attacker's key, not trusted
+
+	oidc, err := mcpserver.NewOIDC(mcpserver.OIDCConfig{Issuer: issuer, Audience: aud, PublicKeyPEM: pubPEM, KeyID: "k1"})
+	if err != nil {
+		fail(err)
+	}
+	verify := oidc.Verifier()
+	now := time.Now()
+	base := func() map[string]any {
+		return map[string]any{"iss": issuer, "aud": aud, "sub": "u1", "role": "analyst",
+			"exp": now.Add(time.Hour).Unix(), "nbf": now.Add(-time.Minute).Unix()}
+	}
+	sign := func(p *rsa.PrivateKey, kid string, c map[string]any) string {
+		t, e := mcpserver.SignJWT(p, kid, c)
+		if e != nil {
+			fail(e)
+		}
+		return t
+	}
+
+	type attack struct {
+		name       string
+		token      string
+		wantAccept bool
+	}
+	var attacks []attack
+	attacks = append(attacks, attack{"valid token (control)", sign(priv, "k1", base()), true})
+	attacks = append(attacks, attack{"no token", "", false})
+	attacks = append(attacks, attack{"malformed jwt", "not.a.jwt.token", false})
+	// expired
+	c := base()
+	c["exp"] = now.Add(-time.Hour).Unix()
+	attacks = append(attacks, attack{"expired token", sign(priv, "k1", c), false})
+	// not yet valid
+	c = base()
+	c["nbf"] = now.Add(time.Hour).Unix()
+	attacks = append(attacks, attack{"not-yet-valid (nbf future)", sign(priv, "k1", c), false})
+	// wrong audience — the confused-deputy attack
+	c = base()
+	c["aud"] = "some-other-service"
+	attacks = append(attacks, attack{"wrong audience (confused deputy)", sign(priv, "k1", c), false})
+	// wrong issuer
+	c = base()
+	c["iss"] = "https://evil-issuer.local"
+	attacks = append(attacks, attack{"untrusted issuer", sign(priv, "k1", c), false})
+	// forged signature (attacker key)
+	attacks = append(attacks, attack{"forged signature (attacker key)", sign(evil, "k1", base()), false})
+	// tampered signature
+	good := sign(priv, "k1", base())
+	attacks = append(attacks, attack{"tampered signature", good[:len(good)-2] + "AA", false})
+
+	fmt.Println("MCP security pen-test — forged tokens vs the real OIDC verifier:")
+	failures := 0
+	for _, a := range attacks {
+		_, verr := verify(ctx, a.token, nil)
+		accepted := verr == nil
+		ok := accepted == a.wantAccept
+		mark := "✓"
+		if !ok {
+			mark = "✗"
+			failures++
+		}
+		verdict := "REJECTED"
+		if accepted {
+			verdict = "ACCEPTED"
+		}
+		fmt.Printf("  %s %-34s → %s\n", mark, a.name, verdict)
+	}
+
+	// Authorization probe: an unauthorized metric must be refused at the
+	// governance boundary even with a perfectly valid token.
+	eng, err := engine.New(ctx, "models/meridian.yaml", envOr("DI_DSN", defaultDSN))
+	if err == nil {
+		defer eng.Close()
+		_, qerr := governance.Query(ctx, eng, semantic.Query{Metrics: []string{"net_revenue"}},
+			governance.Principal{User: "u1", Role: "analyst"}, governance.DefaultPolicy())
+		mark := "✓"
+		if qerr == nil {
+			mark = "✗"
+			failures++
+		}
+		fmt.Printf("  %s %-34s → %s\n", mark, "unauthorized metric (net_revenue)", boolStr(qerr != nil, "REFUSED", "LEAKED"))
+	}
+
+	if failures > 0 {
+		fmt.Fprintf(os.Stderr, "\nPEN-TEST FAILED: %d control(s) breached\n", failures)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "\n-- pen-test passed: all %d attacks rejected, controls intact\n", len(attacks))
+}
+
+func boolStr(b bool, t, f string) string {
+	if b {
+		return t
+	}
+	return f
+}
+
+// runRollout drives the production change-management plane (M21): version
+// registry, canary traffic-split, lineage-driven invalidation.
+//
+//	di rollout register -name v2 -model models/candidate.yaml
+//	di rollout list
+//	di rollout canary  -name v2 -pct 10
+//	di rollout promote -name v2     # retires old active, prints lineage delta
+//	di rollout rollback             # panic button
+//	di rollout simulate -pct 10 -n 1000
+func runRollout(argv []string) {
+	if len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: di rollout <register|list|canary|promote|rollback|simulate> [flags]")
+		os.Exit(2)
+	}
+	sub, rest := argv[0], argv[1:]
+	fs := flag.NewFlagSet("rollout "+sub, flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	name := fs.String("name", "", "version name")
+	model := fs.String("model", "", "model YAML path (register)")
+	pct := fs.Int("pct", 0, "canary percentage 0..100")
+	n := fs.Int("n", 1000, "number of synthetic requests (simulate)")
+	_ = fs.Parse(rest)
+
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+	reg := rollout.New(wh, func() string { return time.Now().UTC().Format(time.RFC3339) })
+
+	switch sub {
+	case "register":
+		if *name == "" || *model == "" {
+			fail(fmt.Errorf("register needs -name and -model"))
+		}
+		v, err := reg.Register(ctx, *name, *model)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("registered %s (hash %s) as %s\n", v.Name, v.Hash, v.Status)
+	case "list":
+		vs, err := reg.List(ctx)
+		if err != nil {
+			fail(err)
+		}
+		for _, v := range vs {
+			pctStr := ""
+			if v.Status == rollout.StatusCanary {
+				pctStr = fmt.Sprintf(" @%d%%", v.CanaryPct)
+			}
+			fmt.Printf("%-10s %-10s%s  hash=%s  %s\n", v.Name, v.Status, pctStr, v.Hash, v.Path)
+		}
+	case "canary":
+		v, err := reg.Canary(ctx, *name, *pct)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s now canary @ %d%% of traffic\n", v.Name, v.CanaryPct)
+	case "promote":
+		changed, err := reg.Promote(ctx, *name)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s is now ACTIVE\n", *name)
+		if len(changed) == 0 {
+			fmt.Println("lineage: no metric definitions changed — no caches to invalidate")
+		} else {
+			fmt.Printf("lineage: %d metric(s) changed → invalidate caches for: %v\n", len(changed), changed)
+		}
+	case "rollback":
+		v, err := reg.Rollback(ctx)
+		if err != nil {
+			fail(err)
+		}
+		if v == nil {
+			fmt.Println("rollback: nothing to restore")
+		} else {
+			fmt.Printf("rolled back — %s restored to ACTIVE\n", v.Name)
+		}
+	case "simulate":
+		counts := map[string]int{}
+		for i := 0; i < *n; i++ {
+			v, err := reg.Route(ctx, fmt.Sprintf("req-%d", i))
+			if err != nil {
+				fail(err)
+			}
+			counts[v.Name+" ("+v.Status+")"]++
+		}
+		fmt.Printf("routed %d requests:\n", *n)
+		for k, c := range counts {
+			fmt.Printf("  %-24s %5d  (%.1f%%)\n", k, c, 100*float64(c)/float64(*n))
+		}
+	default:
+		fail(fmt.Errorf("unknown rollout subcommand %q", sub))
+	}
+}
+
+// runThreats is the threat-model-as-code gate (M11): every threat must name a
+// control + owner + evidence and be mitigated or accepted. Exits 1 on any
+// unaddressed or under-specified threat so it can guard a merge in CI.
+func runThreats(argv []string) {
+	fs := flag.NewFlagSet("threats", flag.ExitOnError)
+	path := fs.String("file", envOr("DI_THREATS", "examples/meridian/threats.yaml"), "threat model YAML")
+	_ = fs.Parse(argv)
+
+	tm, err := governance.LoadThreatModel(*path)
+	if err != nil {
+		fail(err)
+	}
+	issues := tm.Check()
+	for _, t := range tm.Threats {
+		mark := "✓"
+		if t.Status != governance.ThreatMitigated && t.Status != governance.ThreatAccepted {
+			mark = "✗"
+		}
+		fmt.Printf("%s %-22s %-10s %s\n", mark, t.ID, t.Status, t.Title)
+	}
+	if len(issues) > 0 {
+		fmt.Fprintln(os.Stderr, "\nTHREAT MODEL GATE FAILED:")
+		for _, i := range issues {
+			fmt.Fprintln(os.Stderr, "  - "+i)
+		}
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "-- threat model OK: %d threat(s), all addressed\n", len(tm.Threats))
 }
 
 // runEval is the reconciliation / regression / drift gate: every metric must

@@ -27,7 +27,10 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	wh, err := warehouse.OpenPostgres(ctx, dsn, warehouse.Options{AppRole: os.Getenv("DI_DB_APP_ROLE")})
+	wh, err := warehouse.OpenPostgres(ctx, dsn, warehouse.Options{
+		AppRole:      os.Getenv("DI_DB_APP_ROLE"),
+		MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES"), // 0 = disabled
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -36,6 +39,20 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 
 func (e *Engine) Close() error { return e.WH.Close() }
 
+// envBytes reads a byte budget from the environment (plain integer bytes),
+// returning 0 (disabled) when unset or unparseable.
+func envBytes(key string) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	var n int64
+	if _, err := fmt.Sscan(v, &n); err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
 // Answer carries the result plus the compiled SQL and per-stage timings.
 type Answer struct {
 	Columns   []string
@@ -43,6 +60,8 @@ type Answer struct {
 	SQL       string
 	CompileMs int64
 	ExecMs    int64
+	EstRows   int64  // planner's estimated output rows (cost proxy)
+	EstBytes  int64  // planner's estimated output bytes (cost proxy beyond latency)
 	TraceID   string // set by the governance layer when it traces the request
 }
 
@@ -65,6 +84,13 @@ func (e *Engine) run(ctx context.Context, q semantic.Query, sess *warehouse.Sess
 		return nil, fmt.Errorf("compile: %w", err)
 	}
 	compileMs := time.Since(t0).Milliseconds()
+	// Pre-execution cost estimate (one EXPLAIN): used both as the byte-ceiling
+	// guardrail and as a cost signal recorded on the trace. Best-effort — if the
+	// planner can't estimate, fall back to executing without a ceiling.
+	estRows, estBytes, estErr := e.WH.Estimate(ctx, compiled.SQL, compiled.Args...)
+	if estErr == nil && e.WH.MaxScanBytes() > 0 && estBytes > e.WH.MaxScanBytes() {
+		return nil, fmt.Errorf("query refused: estimated %d bytes (%d rows) exceeds the %d-byte ceiling — add a filter or narrow the grain", estBytes, estRows, e.WH.MaxScanBytes())
+	}
 	var res *warehouse.Result
 	if sess != nil {
 		res, err = e.WH.QueryAs(ctx, *sess, compiled.SQL, compiled.Args...)
@@ -77,5 +103,6 @@ func (e *Engine) run(ctx context.Context, q semantic.Query, sess *warehouse.Sess
 	return &Answer{
 		Columns: res.Columns, Rows: res.Rows, SQL: compiled.SQL,
 		CompileMs: compileMs, ExecMs: res.Elapsed.Milliseconds(),
+		EstRows: estRows, EstBytes: estBytes,
 	}, nil
 }

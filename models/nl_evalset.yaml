@@ -1,24 +1,44 @@
-# NL evaluation set. Labeled questions mined from how people
-# actually ask, stratified by category and including governance probes. Each case
-# is graded on three axes:
+# NL evaluation set. Labeled questions mined from how people actually ask,
+# stratified by category and including governance probes. Each case is graded on
+# three axes:
 #   - semantic match : grounding picks the right metric(s) + dimension(s)
 #   - execution      : the governed query runs without error
 #   - result match   : the number(s) equal a hand-written control query
 # Governance probes assert an unauthorized metric is REFUSED, not answered.
 #
 # `control` is the source of truth for the number — never a hardcoded value — so
-# the set stays correct as the seed data evolves.
+# the set stays correct as the seed data evolves. Cases that require real LLM
+# grounding (multi-metric, time-grain windows, free-text filters) are marked
+# `needs_llm: true` and excluded from the offline CI gate.
 
 cases:
-  # --- simple: one measure, no slice ---
+  # ============================================================= simple
   - name: total_revenue_overall
     question: "what is total revenue"
     category: simple
     expect_metrics: [total_revenue]
     control: "SELECT sum(quantity*unit_price) FROM order_items"
 
+  - name: total_revenue_sales_phrasing
+    question: "show me total sales"
+    category: simple
+    expect_metrics: [total_revenue]
+    control: "SELECT sum(quantity*unit_price) FROM order_items"
+
+  - name: total_revenue_topline_phrasing
+    question: "what's our gross revenue"
+    category: simple
+    expect_metrics: [total_revenue]
+    control: "SELECT sum(quantity*unit_price) FROM order_items"
+
   - name: units_sold_overall
     question: "how many units sold"
+    category: simple
+    expect_metrics: [units_sold]
+    control: "SELECT sum(quantity) FROM order_items"
+
+  - name: units_sold_quantity_phrasing
+    question: "total quantity sold"
     category: simple
     expect_metrics: [units_sold]
     control: "SELECT sum(quantity) FROM order_items"
@@ -35,14 +55,26 @@ cases:
     expect_metrics: [refund_total]
     control: "SELECT sum(refund_amount) FROM refunds"
 
-  # --- ratio: never summed ---
+  - name: refund_total_returns_phrasing
+    question: "how much in returns"
+    category: simple
+    expect_metrics: [refund_total]
+    control: "SELECT sum(refund_amount) FROM refunds"
+
+  # ============================================================= ratio
   - name: aov_overall
     question: "average order value"
     category: ratio
     expect_metrics: [avg_order_value]
     control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)::numeric / nullif((SELECT count(DISTINCT order_id) FROM orders),0)"
 
-  # --- grouped: measure sliced by a reachable dimension ---
+  - name: aov_acronym_phrasing
+    question: "what is our aov"
+    category: ratio
+    expect_metrics: [avg_order_value]
+    control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)::numeric / nullif((SELECT count(DISTINCT order_id) FROM orders),0)"
+
+  # ================================================ grouped: total_revenue
   - name: revenue_by_region
     question: "revenue by store region"
     category: grouped
@@ -50,10 +82,79 @@ cases:
     expect_dims: [store_region]
     control: |
       SELECT s.region, sum(oi.quantity*oi.unit_price)
-      FROM order_items oi
-      JOIN orders o ON oi.order_id=o.order_id
-      JOIN stores s ON o.store_id=s.store_id
-      GROUP BY s.region
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN stores s ON o.store_id=s.store_id GROUP BY s.region
+
+  - name: revenue_by_store_type
+    question: "revenue by store type"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [store_type]
+    control: |
+      SELECT s.store_type, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN stores s ON o.store_id=s.store_id GROUP BY s.store_type
+
+  - name: revenue_by_category
+    question: "revenue by product category"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [product_category]
+    control: |
+      SELECT p.category, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      GROUP BY p.category
+
+  - name: revenue_by_brand
+    question: "revenue by product brand"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [product_brand]
+    control: |
+      SELECT p.brand, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      GROUP BY p.brand
+
+  - name: revenue_by_supplier_country
+    question: "revenue by supplier country"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [supplier_country]
+    control: |
+      SELECT sup.country, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      JOIN suppliers sup ON p.supplier_id=sup.supplier_id GROUP BY sup.country
+
+  - name: revenue_by_segment
+    question: "revenue by customer segment"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [customer_segment]
+    control: |
+      SELECT c.segment, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN customers c ON o.customer_id=c.customer_id GROUP BY c.segment
+
+  - name: revenue_by_order_status
+    question: "revenue by order status"
+    category: grouped
+    expect_metrics: [total_revenue]
+    expect_dims: [order_status]
+    control: |
+      SELECT o.status, sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      GROUP BY o.status
+
+  # ================================================ grouped: units_sold
+  - name: units_by_region
+    question: "units sold by store region"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [store_region]
+    control: |
+      SELECT s.region, sum(oi.quantity)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN stores s ON o.store_id=s.store_id GROUP BY s.region
 
   - name: units_by_category
     question: "units sold by product category"
@@ -62,10 +163,50 @@ cases:
     expect_dims: [product_category]
     control: |
       SELECT p.category, sum(oi.quantity)
-      FROM order_items oi
-      JOIN products p ON oi.product_id=p.product_id
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
       GROUP BY p.category
 
+  - name: units_by_brand
+    question: "units sold by product brand"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [product_brand]
+    control: |
+      SELECT p.brand, sum(oi.quantity)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      GROUP BY p.brand
+
+  - name: units_by_store_type
+    question: "units sold by store type"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [store_type]
+    control: |
+      SELECT s.store_type, sum(oi.quantity)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN stores s ON o.store_id=s.store_id GROUP BY s.store_type
+
+  - name: units_by_supplier_country
+    question: "units sold by supplier country"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [supplier_country]
+    control: |
+      SELECT sup.country, sum(oi.quantity)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      JOIN suppliers sup ON p.supplier_id=sup.supplier_id GROUP BY sup.country
+
+  - name: units_by_segment
+    question: "units sold by customer segment"
+    category: grouped
+    expect_metrics: [units_sold]
+    expect_dims: [customer_segment]
+    control: |
+      SELECT c.segment, sum(oi.quantity)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      JOIN customers c ON o.customer_id=c.customer_id GROUP BY c.segment
+
+  # ================================================ grouped: order_count
   - name: orders_by_segment
     question: "order count by customer segment"
     category: grouped
@@ -73,11 +214,75 @@ cases:
     expect_dims: [customer_segment]
     control: |
       SELECT c.segment, count(DISTINCT o.order_id)
-      FROM orders o
-      JOIN customers c ON o.customer_id=c.customer_id
+      FROM orders o JOIN customers c ON o.customer_id=c.customer_id
       GROUP BY c.segment
 
-  # --- time: sliced by the time dimension ---
+  - name: orders_by_region
+    question: "order count by store region"
+    category: grouped
+    expect_metrics: [order_count]
+    expect_dims: [store_region]
+    control: |
+      SELECT s.region, count(DISTINCT o.order_id)
+      FROM orders o JOIN stores s ON o.store_id=s.store_id
+      GROUP BY s.region
+
+  - name: orders_by_store_type
+    question: "order count by store type"
+    category: grouped
+    expect_metrics: [order_count]
+    expect_dims: [store_type]
+    control: |
+      SELECT s.store_type, count(DISTINCT o.order_id)
+      FROM orders o JOIN stores s ON o.store_id=s.store_id
+      GROUP BY s.store_type
+
+  - name: orders_by_status
+    question: "order count by order status"
+    category: grouped
+    expect_metrics: [order_count]
+    expect_dims: [order_status]
+    control: |
+      SELECT o.status, count(DISTINCT o.order_id)
+      FROM orders o GROUP BY o.status
+
+  # ================================================ grouped: ratio (AOV)
+  - name: aov_by_region
+    question: "average order value by store region"
+    category: ratio
+    expect_metrics: [avg_order_value]
+    expect_dims: [store_region]
+    # AOV = total_revenue / order_count, each aggregated to region grain in its
+    # own CTE then joined — order_count counts ALL orders, not only those with
+    # line items (mirrors the layer's aggregate-then-join).
+    control: |
+      WITH rev AS (
+        SELECT s.region, sum(oi.quantity*oi.unit_price) AS s
+        FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+        JOIN stores s ON o.store_id=s.store_id GROUP BY s.region),
+      oc AS (
+        SELECT s.region, count(DISTINCT o.order_id) AS c
+        FROM orders o JOIN stores s ON o.store_id=s.store_id GROUP BY s.region)
+      SELECT rev.region, rev.s::numeric / nullif(oc.c,0)
+      FROM rev JOIN oc ON rev.region=oc.region
+
+  - name: aov_by_segment
+    question: "average order value by customer segment"
+    category: ratio
+    expect_metrics: [avg_order_value]
+    expect_dims: [customer_segment]
+    control: |
+      WITH rev AS (
+        SELECT c.segment, sum(oi.quantity*oi.unit_price) AS s
+        FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+        JOIN customers c ON o.customer_id=c.customer_id GROUP BY c.segment),
+      oc AS (
+        SELECT c.segment, count(DISTINCT o.order_id) AS c
+        FROM orders o JOIN customers c ON o.customer_id=c.customer_id GROUP BY c.segment)
+      SELECT rev.segment, rev.s::numeric / nullif(oc.c,0)
+      FROM rev JOIN oc ON rev.segment=oc.segment
+
+  # ================================================ time (by order_date)
   - name: revenue_by_date
     question: "total revenue by order date"
     category: time
@@ -85,15 +290,40 @@ cases:
     expect_dims: [order_date]
     control: |
       SELECT o.order_date, sum(oi.quantity*oi.unit_price)
-      FROM order_items oi
-      JOIN orders o ON oi.order_id=o.order_id
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
       GROUP BY o.order_date
 
-  # --- governance probe: net_revenue is finance/admin only ---
+  - name: units_by_date
+    question: "units sold by order date"
+    category: time
+    expect_metrics: [units_sold]
+    expect_dims: [order_date]
+    control: |
+      SELECT o.order_date, sum(oi.quantity)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      GROUP BY o.order_date
+
+  - name: orders_by_date
+    question: "order count by order date"
+    category: time
+    expect_metrics: [order_count]
+    expect_dims: [order_date]
+    control: |
+      SELECT o.order_date, count(DISTINCT o.order_id)
+      FROM orders o GROUP BY o.order_date
+
+  # ============================================================= governance
   - name: net_revenue_refused_for_analyst
     question: "what is net revenue"
     category: governance
     role: analyst
+    expect_metrics: [net_revenue]
+    expect_refused: true
+
+  - name: net_revenue_refused_for_manager
+    question: "what is net revenue"
+    category: governance
+    role: manager
     expect_metrics: [net_revenue]
     expect_refused: true
 
@@ -104,9 +334,96 @@ cases:
     expect_metrics: [net_revenue]
     control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"
 
-  # --- ambiguous: requires the LLM to ask back (skipped offline) ---
+  - name: net_revenue_allowed_for_admin
+    question: "what is net revenue"
+    category: governance
+    role: admin
+    expect_metrics: [net_revenue]
+    control: "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"
+
+  - name: pii_email_masked_for_analyst
+    question: "revenue by customer email"
+    category: governance
+    role: analyst
+    expect_metrics: [total_revenue]
+    expect_dims: [customer_email]
+    # No control: masking returns '***' for the analyst — assert it RUNS and is
+    # masked rather than matching a number. Graded on semantic + execution.
+
+  # ============================================================= ambiguous
   - name: ambiguous_numbers
     question: "show me the numbers"
     category: ambiguous
     needs_llm: true
     expect_clarify: true
+
+  - name: ambiguous_performance
+    question: "how are we doing"
+    category: ambiguous
+    needs_llm: true
+    expect_clarify: true
+
+  # ===================================================== llm-only: windows
+  - name: revenue_ytd_by_month
+    question: "year to date revenue by month"
+    category: time
+    needs_llm: true
+    expect_metrics: [revenue_ytd]
+    expect_dims: [order_date]
+
+  - name: revenue_running_total
+    question: "running total of revenue over time"
+    category: time
+    needs_llm: true
+    expect_metrics: [revenue_cumulative]
+    expect_dims: [order_date]
+
+  - name: revenue_rolling_3_month
+    question: "rolling 3 month revenue"
+    category: time
+    needs_llm: true
+    expect_metrics: [revenue_rolling_3]
+    expect_dims: [order_date]
+
+  - name: revenue_momentum
+    question: "month over month revenue change"
+    category: time
+    needs_llm: true
+    expect_metrics: [revenue_delta]
+    expect_dims: [order_date]
+
+  # ===================================================== llm-only: multi-metric
+  - name: revenue_and_units_by_region
+    question: "revenue and units sold by store region"
+    category: multi
+    needs_llm: true
+    expect_metrics: [total_revenue, units_sold]
+    expect_dims: [store_region]
+
+  - name: revenue_and_orders_by_segment
+    question: "revenue and order count by customer segment"
+    category: multi
+    needs_llm: true
+    expect_metrics: [total_revenue, order_count]
+    expect_dims: [customer_segment]
+
+  # ===================================================== llm-only: filters
+  - name: revenue_completed_orders
+    question: "total revenue for completed orders"
+    category: filter
+    needs_llm: true
+    expect_metrics: [total_revenue]
+    control: |
+      SELECT sum(oi.quantity*oi.unit_price)
+      FROM order_items oi JOIN orders o ON oi.order_id=o.order_id
+      WHERE o.status='completed'
+
+  - name: units_electronics_category
+    question: "units sold in the Electronics category"
+    category: filter
+    needs_llm: true
+    expect_metrics: [units_sold]
+    control: |
+      SELECT sum(oi.quantity)
+      FROM order_items oi JOIN products p ON oi.product_id=p.product_id
+      WHERE p.category='Electronics'

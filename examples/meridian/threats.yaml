@@ -1,0 +1,86 @@
+# Threat model as code (M11). Each row maps an attack path to the control that
+# addresses it, an accountable owner, and where to verify it. `di threats` fails
+# CI on any threat that is open or under-specified — the security posture cannot
+# silently rot. This is the EXAMPLE deployment's model; the platform only
+# supplies the schema + the gate.
+
+threats:
+  - id: T1-pii-leak
+    title: "PII (customer email) leaks to an unauthorized caller"
+    vector: "Analyst groups a query by customer_email and reads raw addresses."
+    control: "Column masking at the semantic layer: customer_email returns '***' unless the role is privileged."
+    owner: data-governance
+    status: mitigated
+    evidence: "nleval case pii_email_masked_for_analyst; governance.Query masking path."
+
+  - id: T2-confused-deputy
+    title: "Confused-deputy: agent reuses its own token to read another user's data"
+    vector: "MCP server forwards the client token straight to the warehouse, or accepts a token minted for a different audience."
+    control: "OIDC audience binding (RFC 8707) + RFC 8693 on-behalf-of exchange to a warehouse-audience token; client token is never forwarded."
+    owner: platform-security
+    status: mitigated
+    evidence: "mcp/oidc.go audience check; mcp/obo.go ExchangeToken; di obo demo."
+
+  - id: T3-row-scope-bypass
+    title: "Manager reads regions outside their scope"
+    vector: "App-layer RLS is skipped or the DB session runs as a superuser that bypasses row security."
+    control: "Per-user DB session: SET LOCAL ROLE to a least-priv role + app.* GUCs; Postgres row-security policy enforces region even if the app layer misses."
+    owner: platform-security
+    status: mitigated
+    evidence: "warehouse.QueryAs; di obo demo (manager sees only its region)."
+
+  - id: T4-fanout-inflation
+    title: "Silent wrong number from a fan-out / chasm join"
+    vector: "An order-grain measure is joined to line items (or two 1:many children), multiplying the total."
+    control: "Compiler aggregates each measure to its base grain in its own CTE, then joins — fan-out/chasm impossible by construction."
+    owner: semantic-layer
+    status: mitigated
+    evidence: "semantic-go compile.go; di eval reconciliation 5/5."
+
+  - id: T5-rogue-sql
+    title: "Agent runs arbitrary SQL, escaping governance"
+    vector: "A run_sql tool lets the model issue raw queries that skip RBAC/masking/RLS."
+    control: "MCP exposes only thick tools (list_metrics/get_dimensions/query_metric); no run_sql. All reads go through governance.Query."
+    owner: platform-security
+    status: mitigated
+    evidence: "mcp server tool list; di mcp."
+
+  - id: T6-unbounded-cost
+    title: "A single query scans the warehouse and exhausts budget"
+    vector: "An unfiltered cross-join or huge group-by runs without a ceiling."
+    control: "Read-only sessions + statement timeout + row cap + estimated-bytes ceiling (refused before execution when the planner estimate exceeds the cap)."
+    owner: platform-ops
+    status: mitigated
+    evidence: "warehouse guardrails; governance MaxScanBytes; di query refusal on over-budget."
+
+  - id: T7-unauthorized-metric
+    title: "Caller reads a metric outside their role (e.g. net_revenue)"
+    vector: "Analyst asks for a finance-only metric and the layer answers it."
+    control: "Metric-level RBAC: a caller cannot even name a metric they are not authorized for; the grounder declines."
+    owner: data-governance
+    status: mitigated
+    evidence: "nleval net_revenue_refused_for_analyst / _manager."
+
+  - id: T8-write-without-approval
+    title: "Agent mutates production data without sign-off"
+    vector: "A write-back proposal is committed by its own proposer, or outside the allowlist."
+    control: "Typed proposals confined to a writable allowlist; propose→approve→commit with separation of duties (proposer != approver); atomic rollback from before-image."
+    owner: data-governance
+    status: mitigated
+    evidence: "writeback/ ; di propose/approve/revert."
+
+  - id: T9-accuracy-regression
+    title: "A model change silently lowers answer accuracy"
+    vector: "A metric edit ships that breaks the result for some questions."
+    control: "NL eval CI gate (di nleval): labeled set graded against control SQL, per-category floor, exits 1 on regression."
+    owner: analytics-eng
+    status: mitigated
+    evidence: "models/nl_evalset.yaml (47 cases); di nleval 100% offline."
+
+  - id: T10-prompt-injection
+    title: "Prompt injection steers the agent to leak or over-fetch"
+    vector: "Untrusted text in a question/field instructs the model to ignore policy."
+    control: "Governance is enforced post-grounding at the query boundary, not in the prompt; the model can only emit a typed semantic query, never SQL or new permissions."
+    owner: platform-security
+    status: accepted
+    evidence: "governance.Query runs regardless of grounding output; residual risk accepted pending an input-scanning layer."

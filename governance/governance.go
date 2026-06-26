@@ -100,7 +100,9 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	tr.Attrs["metrics"] = q.Metrics
 	tr.Attrs["group_by"] = q.GroupBy
 	tr.Attrs["rows"] = len(ans.Rows)
+	tr.Attrs["est_bytes"] = ans.EstBytes // cost proxy beyond latency
 	tr.Add("compile", ans.CompileMs, map[string]any{"sql_len": len(ans.SQL)})
+	tr.Add("plan", 0, map[string]any{"est_rows": ans.EstRows, "est_bytes": ans.EstBytes})
 	tr.Add("execute", ans.ExecMs, map[string]any{"rows": len(ans.Rows)})
 	_ = tr.Finish(ctx, eng.WH, time.Now().UnixNano())
 	ans.TraceID = tr.ID

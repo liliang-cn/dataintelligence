@@ -199,7 +199,7 @@ After grounding, the residual ~10% is a context problem, not a model problem.
 
 ## Module 11. The Governance Gap
 
-> **Status:** 🟡 Partial — RBAC/masking/audit; threat-model-as-code not built. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — RBAC/masking/audit + **threat-model-as-code** (`governance/threatmodel.go`, `examples/meridian/threats.yaml`, `di threats`): 10 threats each mapped to a control + owner + evidence; the CI gate fails on any open/under-specified threat. Verified 10/10 addressed. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 Accurate ≠ authorized. Agents are a new data consumer = new attack surface.
 
@@ -226,7 +226,7 @@ Policy belongs in the layer, not the prompt — enforced at compile time **and**
 
 ## Module 13. Guardrails
 
-> **Status:** 🟡 Partial — timeout + row cap + write-approval (flow); spend caps & read-only grants not built. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — read-only sessions + timeout + row cap + write-approval (flow) + **pre-execution byte ceiling** (`warehouse.Estimate`/`GuardCost` via `EXPLAIN`; `DI_MAX_SCAN_BYTES` refuses an over-budget query before a row is read — verified) + estimated cost recorded on the trace. Missing: per-tenant spend accounting over time. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 Containing the runaway agent (the $40k weekend query).
 
@@ -281,7 +281,7 @@ Wrap the semantic layer as thick tools.
 
 ## Module 17. Securing MCP
 
-> **Status:** ✅ Built — **real OIDC/JWT verification** (`mcp/oidc.go`, `di mcp -oidc`): stdlib RS256 via JWKS or static key, issuer/audience/exp/nbf checks (audience = confused-deputy cure, RFC 8707), claims→principal, 401 on reject; `di token` dev issuer **+ RFC 8693 on-behalf-of** (`mcp.ExchangeToken`: re-scope to warehouse audience, never forward the client token) **+ per-user DB session** (`warehouse.QueryAs`: `SET LOCAL ROLE` least-priv + `app.*` GUCs → **Postgres RLS** scopes the real user; `di obo setup/demo/chain`). Live: manager session → only its region, admin → all; nleval 11/11 no regression. Plus scopes + per-principal rate limit + tenant claim. Missing: automated pen-test gate (lesson 75). · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — **real OIDC/JWT verification** (`mcp/oidc.go`, `di mcp -oidc`): stdlib RS256 via JWKS or static key, issuer/audience/exp/nbf checks (audience = confused-deputy cure, RFC 8707), claims→principal, 401 on reject; `di token` dev issuer **+ RFC 8693 on-behalf-of** (`mcp.ExchangeToken`: re-scope to warehouse audience, never forward the client token) **+ per-user DB session** (`warehouse.QueryAs`: `SET LOCAL ROLE` least-priv + `app.*` GUCs → **Postgres RLS** scopes the real user; `di obo setup/demo/chain`). Live: manager session → only its region, admin → all; nleval 11/11 no regression. Plus scopes + per-principal rate limit + tenant claim **+ automated pen-test gate** (`di pentest`, lesson 75): fires 9 forged tokens (expired / nbf-future / wrong-audience / untrusted-issuer / forged & tampered signatures / malformed / missing) at the real verifier plus an unauthorized-metric probe, exits 1 if any control is breached — verified all rejected. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 72. **The Confused-Deputy Problem** — the server uses *its* authority for the *caller's* request; many users behind one agent collapse to one privilege. Cure: validate token audience (RFC 8707) names this server.
 73. **Per-User Identity Propagation and Scopes** — never pass the client token through; use on-behalf-of exchange (RFC 8693) to mint a warehouse-audience token; open the session as the real user so Module-12 policy fires. Map each tool to a minimum scope.
@@ -334,7 +334,7 @@ Trace the wrong answer back.
 
 ## Module 21. Production Hardening
 
-> **Status:** 🟡 Mostly done — drift gate (`di eval`), **stable-SQL result cache** + **graceful degradation** (stale-on-error, tested), **shadow rollout** (`di shadow`), **runbook** (`docs/RUNBOOK.md`). Missing: canary traffic-split, lineage-driven cache invalidation, version registry. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — drift gate (`di eval`), result cache + graceful degradation, shadow rollout (`di shadow`), runbook, **plus the full change-management plane** (`rollout/`, `di rollout`): persisted **version registry**, deterministic **canary traffic-split** (verified 20%→20.4% over 1000 reqs), **lineage-driven invalidation** (promote diffs metric definitions → invalidates only changed metrics' caches), and one-command **rollback**. Missing: automated canary metric-watcher that auto-rolls-back. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 89. **Semantic Drift** — model and warehouse fall out of sync with no error (structural / semantic / grain / join). Detect by running the eval gate against production nightly + source contract tests.
 90. **Caching and Latency** — three tiers (warehouse result cache → semantic-layer cache → pre-aggregations); stable/byte-identical SQL (which grounding gives free) makes caching hit; lineage-driven invalidation; cache is never a source of truth.
@@ -359,7 +359,7 @@ Ship and defend an agent-queryable semantic layer.
 
 ## Module 23. Wrap-Up
 
-> **Status:** 🟡 8-dim rubric: Semantic Model/Grounding/**Evaluation** ✅ (Evaluation now has a labeled set + accuracy % + CI gate via `di nleval`); Governance/Observability/Drift 🟡; MCP-Security/Autonomy gaps. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ 8-dim rubric, no red: Semantic Model / Grounding / Evaluation (47-case set, 100% offline + CI gate) / Governance (threat-as-code) / MCP-Security (`di pentest`: 9 forged-token attacks rejected) / Autonomy (write-back + byte ceiling) / Drift (version registry + canary + lineage invalidation) all green; Observability now records per-query cost (est_bytes) alongside latency. Remaining lift to a perfect score: full OTel SDK + cross-process span propagation, grounding cost benchmark. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 96. **The 8-Dimension Defense Rubric** — for each: a probe question + the evidence. **(1) Semantic Model** (one revenue def + join graph) · **(2) Grounding** (semantic query, 40→90) · **(3) Evaluation** (accuracy % + CI gate) · **(4) Governance** (RBAC/RLS/masking/k-anon, all in the layer) · **(5) MCP Security** (per-user identity, no confused deputy) · **(6) Autonomy** (read-only, caps, approvals, audit) · **(7) Observability** (full trace, root cause in minutes) · **(8) Drift** (drift watcher + eval gate). A single red blocks launch. Ninth muscle: defend the engine choice.
 97. **Your Roadmap From Here** — naive (40%) → semantic layer (90%) → governance/guardrails → MCP → observability. Frontier: residual 10%, multi-agent + write-back, a moving spec, eternal drift. "Agent-ready is a posture you maintain, not a milestone you finish." 4-week roadmap: (1) define one contested metric, (2) log the join graph for the top 3 questions, (3) build a 50-question eval set, (4) wrap it in a governed, identity-propagated MCP server.

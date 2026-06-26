@@ -6,6 +6,7 @@ package warehouse
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -13,9 +14,10 @@ import (
 )
 
 type Options struct {
-	Timeout time.Duration // per-query statement timeout (default 30s)
-	MaxRows int           // hard row cap (default 10000) — guardrail the agent can't override
-	AppRole string        // if set, QueryAs runs as this least-privilege role so RLS applies (superusers bypass RLS)
+	Timeout      time.Duration // per-query statement timeout (default 30s)
+	MaxRows      int           // hard row cap (default 10000) — guardrail the agent can't override
+	MaxScanBytes int64         // if >0, refuse a query whose planner estimate exceeds this (pre-execution cost ceiling)
+	AppRole      string        // if set, QueryAs runs as this least-privilege role so RLS applies (superusers bypass RLS)
 }
 
 type Warehouse struct {
@@ -51,6 +53,53 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Warehouse, er
 }
 
 func (w *Warehouse) Close() error { return w.db.Close() }
+
+// MaxScanBytes exposes the configured byte ceiling (0 = disabled).
+func (w *Warehouse) MaxScanBytes() int64 { return w.opts.MaxScanBytes }
+
+// Estimate asks the planner (EXPLAIN, no execution) for the estimated output
+// size of a query: rows × per-row width. It runs nothing against the data, so
+// it is safe to call as a pre-flight cost check.
+func (w *Warehouse) Estimate(ctx context.Context, query string, args ...any) (rows int64, bytes int64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
+	defer cancel()
+	var js []byte
+	row := w.db.QueryRowContext(ctx, "EXPLAIN (FORMAT JSON) "+query, args...)
+	if err = row.Scan(&js); err != nil {
+		return 0, 0, fmt.Errorf("explain: %w", err)
+	}
+	// EXPLAIN (FORMAT JSON) → [ { "Plan": { "Plan Rows": N, "Plan Width": W, ... } } ]
+	var plans []struct {
+		Plan struct {
+			Rows  int64 `json:"Plan Rows"`
+			Width int64 `json:"Plan Width"`
+		} `json:"Plan"`
+	}
+	if err = json.Unmarshal(js, &plans); err != nil || len(plans) == 0 {
+		return 0, 0, fmt.Errorf("parse explain: %w", err)
+	}
+	rows = plans[0].Plan.Rows
+	bytes = rows * plans[0].Plan.Width
+	return rows, bytes, nil
+}
+
+// GuardCost refuses a query whose estimated output exceeds MaxScanBytes, before
+// a single row is read. A no-op when the ceiling is disabled. This is the
+// pre-execution half of the cost guardrails (the timeout + row cap are the
+// during/after halves).
+func (w *Warehouse) GuardCost(ctx context.Context, query string, args ...any) error {
+	if w.opts.MaxScanBytes <= 0 {
+		return nil
+	}
+	rows, bytes, err := w.Estimate(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if bytes > w.opts.MaxScanBytes {
+		return fmt.Errorf("query refused: estimated %d bytes (%d rows) exceeds the %d-byte ceiling — add a filter or narrow the grain", bytes, rows, w.opts.MaxScanBytes)
+	}
+	return nil
+}
 
 // Exec runs a statement (DDL / INSERT) under the timeout and returns rows affected.
 func (w *Warehouse) Exec(ctx context.Context, query string, args ...any) (int64, error) {
