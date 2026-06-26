@@ -30,6 +30,7 @@ import (
 
 	agentpkg "github.com/liliang-cn/agent-go/v2/pkg/agent"
 	"github.com/liliang-cn/agent-go/v2/pkg/domain"
+	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 	"github.com/liliang-cn/agent-go/v2/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
 
@@ -44,6 +45,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/ingest"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
+	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/nleval"
 	"github.com/liliang-cn/dataintelligence/nodes"
@@ -332,13 +334,25 @@ func runExplain(argv []string) {
 // metric describes itself and declares how it rolls up. Exits 1 on any error so
 // it can guard a merge in CI. The rules live in the neutral core (semantic.Lint).
 func runModel(argv []string) {
-	if len(argv) == 0 || argv[0] != "lint" {
-		fmt.Fprintln(os.Stderr, "usage: di model lint [-model path]")
+	if len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: di model <lint|gen> [flags]")
 		os.Exit(2)
 	}
+	switch argv[0] {
+	case "lint":
+		runModelLint(argv[1:])
+	case "gen":
+		runModelGen(argv[1:])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: di model <lint|gen> [flags]")
+		os.Exit(2)
+	}
+}
+
+func runModelLint(argv []string) {
 	fs := flag.NewFlagSet("model lint", flag.ExitOnError)
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
-	_ = fs.Parse(argv[1:])
+	_ = fs.Parse(argv)
 
 	m, err := semantic.LoadFile(*model)
 	if err != nil {
@@ -356,6 +370,60 @@ func runModel(argv []string) {
 	if errs > 0 {
 		os.Exit(1)
 	}
+}
+
+// runModelGen is self-serve onboarding: introspect a warehouse and emit a
+// semantic-model draft (heuristic, optionally LLM-refined) for a human to review.
+//
+//	di model gen -dsn ... -out draft.yaml          # heuristic
+//	LLM_BASE_URL/LLM_API_KEY/LLM_MODEL set → adds AI-refined descriptions/metrics
+func runModelGen(argv []string) {
+	fs := flag.NewFlagSet("model gen", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN to introspect")
+	out := fs.String("out", "", "write the draft YAML here (default: stdout)")
+	useLLM := fs.Bool("llm", true, "refine with the LLM when LLM_* env is set")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+
+	schema, err := modelgen.Introspect(ctx, wh)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "-- introspected %d table(s)\n", len(schema.Tables))
+
+	var ask modelgen.AskFunc
+	mode := "heuristic"
+	if *useLLM {
+		if svc, lerr := llm.NewOpenAIFromEnv(); lerr == nil {
+			ask = svc.Ask
+			mode = "heuristic + LLM refine"
+		}
+	}
+	model, issues, err := modelgen.Generate(ctx, schema, ask)
+	if err != nil {
+		fail(err)
+	}
+	yamlOut, err := modelgen.ToYAML(model)
+	if err != nil {
+		fail(err)
+	}
+	if *out == "" {
+		fmt.Print(string(yamlOut))
+	} else {
+		if err := os.WriteFile(*out, yamlOut, 0o644); err != nil {
+			fail(err)
+		}
+		fmt.Fprintf(os.Stderr, "-- wrote %s\n", *out)
+	}
+	fmt.Fprintf(os.Stderr, "-- mode: %s · %d entities, %d joins, %d dimensions, %d metrics · %d lint note(s)\n",
+		mode, len(model.Entities), len(model.Joins), len(model.Dimensions), len(model.Metrics), len(issues))
+	fmt.Fprintln(os.Stderr, "-- review the draft, then run: di model lint -model <file>  and  di eval")
 }
 
 // runSpend shows or resets the per-tenant spend ledger (M13/M21):
