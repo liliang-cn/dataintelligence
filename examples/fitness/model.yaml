@@ -1,0 +1,108 @@
+# Semantic model for "Reformd" — the boutique reformer-pilates example domain.
+# Shows the platform on a second, unrelated business: bookings, sessions, and
+# payments live at three different grains, so fill-rate and no-show-rate exercise
+# the compiler's aggregate-then-join (chasm-safe) path.
+
+entities:
+  - {name: studio,     table: studios,     primary_key: studio_id}
+  - {name: class_type, table: class_types, primary_key: class_type_id}
+  - {name: instructor, table: instructors, primary_key: instructor_id}
+  - {name: member,     table: members,     primary_key: member_id}
+  - {name: session,    table: sessions,    primary_key: session_id}
+  - {name: booking,    table: bookings,    primary_key: booking_id}
+  - {name: payment,    table: payments,    primary_key: payment_id}
+
+joins:
+  - {from: booking,    to: session,    from_key: session_id,     to_key: session_id,     cardinality: many_to_one}
+  - {from: booking,    to: member,     from_key: member_id,      to_key: member_id,      cardinality: many_to_one}
+  - {from: session,    to: studio,     from_key: studio_id,      to_key: studio_id,      cardinality: many_to_one}
+  - {from: session,    to: instructor, from_key: instructor_id,  to_key: instructor_id,  cardinality: many_to_one}
+  - {from: session,    to: class_type, from_key: class_type_id,  to_key: class_type_id,  cardinality: many_to_one}
+  - {from: instructor, to: studio,     from_key: studio_id,      to_key: studio_id,      cardinality: many_to_one}
+  - {from: member,     to: studio,     from_key: home_studio_id, to_key: studio_id,      cardinality: many_to_one}
+  - {from: payment,    to: member,     from_key: member_id,      to_key: member_id,      cardinality: many_to_one}
+
+dimensions:
+  - {name: studio_name,      entity: studio,     column: name,         type: categorical}
+  - {name: studio_city,      entity: studio,     column: city,         type: categorical}
+  - {name: studio_region,    entity: studio,     column: region,       type: categorical}  # RLS key
+  - {name: class_name,       entity: class_type, column: name,         type: categorical}
+  - {name: class_intensity,  entity: class_type, column: intensity,    type: categorical}
+  - {name: instructor_name,  entity: instructor, column: name,         type: categorical}
+  - {name: member_tier,      entity: member,     column: tier,         type: categorical}
+  - {name: member_email,     entity: member,     column: email,        type: categorical, mask: "'***'"}
+  - {name: booking_status,   entity: booking,    column: status,       type: categorical}
+  - {name: session_time,     entity: session,    column: scheduled_at, type: time}
+
+metrics:
+  - name: bookings_count
+    description: "Total bookings made (any status)."
+    synonyms: [bookings, reservations]
+    entity: booking
+    agg: count
+    expr: "booking_id"
+
+  - name: booked_count
+    description: "Confirmed bookings (status = booked), excluding cancellations and waitlist."
+    synonyms: [confirmed bookings]
+    entity: booking
+    agg: sum
+    expr: "(status = 'booked')::int"
+
+  - name: attendance
+    description: "Members who actually checked in at the front desk."
+    synonyms: [check-ins, attended]
+    entity: booking
+    agg: sum
+    expr: "(attended)::int"
+
+  - name: capacity_offered
+    description: "Total reformer seats offered across sessions."
+    synonyms: [seats, capacity]
+    entity: session
+    agg: sum
+    expr: "capacity"
+
+  - name: revenue
+    description: "Total payments collected (memberships + class packs + drop-ins)."
+    synonyms: [sales, income, payments]
+    entity: payment
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]   # RBAC: revenue is finance/admin only
+
+  - name: active_members
+    description: "Distinct members who booked at least once."
+    synonyms: [unique members, who booked]
+    entity: booking
+    agg: count_distinct
+    expr: "member_id"
+    additivity: non_additive
+
+  # --- ratios across grains (chasm-safe: each base aggregates in its own CTE) ---
+  - name: attendance_rate
+    description: "Share of confirmed bookings that checked in. A ratio — never summed."
+    synonyms: [show rate, check-in rate]
+    formula: "attendance::numeric / nullif(booked_count, 0)"
+    additivity: non_additive
+
+  - name: no_show_rate
+    description: "Share of confirmed bookings that did NOT check in."
+    synonyms: [no show, did not attend]
+    formula: "(booked_count - attendance)::numeric / nullif(booked_count, 0)"
+    additivity: non_additive
+
+  - name: fill_rate
+    description: "Confirmed bookings as a share of seats offered (studio utilization)."
+    synonyms: [utilization, occupancy]
+    formula: "booked_count::numeric / nullif(capacity_offered, 0)"
+    additivity: non_additive
+
+  # --- time intelligence ---
+  - name: revenue_ytd
+    description: "Year-to-date revenue: running total that restarts each calendar year."
+    synonyms: [ytd revenue, year to date]
+    of: revenue
+    window: cumulative
+    reset: year
+    roles: [finance, admin]
