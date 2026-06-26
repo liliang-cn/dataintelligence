@@ -49,6 +49,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/nleval"
+	"github.com/liliang-cn/dataintelligence/reconcile"
 	"github.com/liliang-cn/dataintelligence/nodes"
 	"github.com/liliang-cn/dataintelligence/rollout"
 	"github.com/liliang-cn/dataintelligence/runtime"
@@ -125,6 +126,7 @@ func rootCmd() *cobra.Command {
 		leaf("token", "gov", "Dev token issuer (gen-key / mint)", runToken),
 		leaf("obo", "gov", "On-behalf-of identity propagation demo", runOBO),
 		leaf("spend", "gov", "Per-tenant spend ledger", runSpend),
+		leaf("reconcile", "gov", "Detect cross-source data conflicts (AI triage)", runReconcile),
 		leaf("trace", "gov", "OpenTelemetry trace-propagation demo", runTrace),
 		// service & operations
 		leaf("serve", "ops", "Run the service daemon (REST /v1 + MCP + /ui)", runServe),
@@ -437,6 +439,66 @@ func runModelGen(argv []string) {
 	fmt.Fprintf(os.Stderr, "-- mode: %s · %d entities, %d joins, %d dimensions, %d metrics · %d lint note(s)\n",
 		mode, len(model.Entities), len(model.Joins), len(model.Dimensions), len(model.Metrics), len(issues))
 	fmt.Fprintln(os.Stderr, "-- review the draft, then run: di model lint -model <file>  and  di eval")
+}
+
+// runReconcile detects cross-source data conflicts (deterministic SQL checks)
+// and, when LLM_* is set, has the LLM triage each conflict — likely cause,
+// system-of-record, recommended fix. Detection is reliable; AI adds judgment.
+func runReconcile(argv []string) {
+	fs := flag.NewFlagSet("reconcile", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	checks := fs.String("checks", "examples/meridian/conflicts.yaml", "conflict checks YAML")
+	ai := fs.Bool("ai", true, "LLM triage of each conflict when LLM_* is set")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+	cs, err := reconcile.Load(*checks)
+	if err != nil {
+		fail(err)
+	}
+
+	var ask reconcile.AskFunc
+	mode := "detection only"
+	if *ai {
+		if svc, lerr := llm.NewOpenAIFromEnv(); lerr == nil {
+			ask = svc.Ask
+			mode = "detection + LLM triage"
+		}
+	}
+	results, err := reconcile.Run(ctx, wh, cs, ask)
+	if err != nil {
+		fail(err)
+	}
+
+	total := 0
+	for _, r := range results {
+		mark := "✓"
+		if r.Count() > 0 {
+			mark = "✗"
+			total += r.Count()
+		}
+		fmt.Printf("\n%s [%s] %s — %d conflict(s)\n", mark, r.Check.Severity, r.Check.Name, r.Count())
+		for i, row := range r.Rows {
+			if i >= 5 {
+				fmt.Printf("    … and %d more\n", r.Count()-5)
+				break
+			}
+			cells := make([]string, len(row))
+			for j, v := range row {
+				cells[j] = fmt.Sprintf("%v", v)
+			}
+			fmt.Printf("    %s\n", strings.Join(cells, " | "))
+		}
+		if r.Triage != "" {
+			fmt.Printf("  🧠 AI triage: %s\n", r.Triage)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\n-- %s · %d total conflict(s) across %d check(s)\n", mode, total, len(results))
 }
 
 // runSpend shows or resets the per-tenant spend ledger (M13/M21):

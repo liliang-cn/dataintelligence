@@ -1,0 +1,52 @@
+# Cross-source data-conflict checks for the Meridian scenario. Detection is plain
+# SQL over the warehouse + ingested source tables (run `di source ingest` first
+# for online_orders / supplier_catalog / live_inventory). `di reconcile` runs
+# these; with an LLM wired it triages each conflict that fires. Neutral: the
+# rules live here, not in the platform.
+
+checks:
+  - name: orphan_online_orders
+    severity: warn
+    description: >
+      Online orders (MySQL) whose customer_email has no matching customer in the
+      warehouse (Postgres) — a record that exists in one system but not the other.
+    sql: |
+      SELECT w.order_ref, w.customer_email, w.amount
+      FROM _src_online_orders w
+      LEFT JOIN customers c ON c.email = w.customer_email
+      WHERE c.customer_id IS NULL
+      ORDER BY w.order_ref
+
+  - name: supplier_price_drift
+    severity: critical
+    description: >
+      The supplier price-list (S3) quotes a unit cost that disagrees with the
+      warehouse's unit_cost (Postgres) by more than $1 — the cost of record is
+      stale relative to what the supplier now charges.
+    sql: |
+      SELECT p.product_id, p.product_name,
+             p.unit_cost AS warehouse_cost,
+             c.new_cost::numeric AS supplier_price,
+             round(c.new_cost::numeric - p.unit_cost, 2) AS delta
+      FROM products p
+      JOIN _src_supplier_catalog c ON substr(c.supplier_sku, 5)::int = p.product_id
+      WHERE abs(c.new_cost::numeric - p.unit_cost) > 1.0
+      ORDER BY abs(c.new_cost::numeric - p.unit_cost) DESC
+
+  - name: oversold_out_of_stock
+    severity: critical
+    description: >
+      Products that have sales (Postgres order_items) but zero on-hand inventory
+      across all stores in the real-time counters (Redis) — sold while showing
+      out of stock everywhere.
+    sql: |
+      SELECT p.product_id, p.product_name,
+             COALESCE(sum(i.value::int), 0) AS on_hand,
+             s.sold
+      FROM products p
+      JOIN (SELECT product_id, sum(quantity) AS sold FROM order_items GROUP BY product_id) s
+        ON s.product_id = p.product_id
+      LEFT JOIN (SELECT split_part(key, ':', 2)::int AS pid, value FROM _src_live_inventory) i
+        ON i.pid = p.product_id
+      GROUP BY p.product_id, p.product_name, s.sold
+      HAVING COALESCE(sum(i.value::int), 0) = 0
