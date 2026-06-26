@@ -1,0 +1,32 @@
+# DataIntelligence service config. One file boots the whole daemon (REST /v1 +
+# MCP), domain-neutral: point `model`/`sources` at any deployment's artifacts.
+# ${ENV} is expanded at load, so secrets live in the environment, not here.
+
+model: models/meridian.yaml                # the semantic model to serve
+sources: examples/meridian/sources.yaml    # generic source manifest (optional)
+index_path: ""                             # grounding index sqlite (empty = temp)
+
+warehouse:
+  dsn: "${DI_DSN}"                         # e.g. postgres://user:pass@host:5432/db?sslmode=disable
+  app_role: "di_app"                       # least-priv role for per-user OBO sessions (RLS)
+  max_scan_bytes: 0                        # pre-execution byte ceiling (0 = off)
+  timeout_secs: 30
+  max_rows: 10000
+
+auth:
+  # Omit the whole `oidc` block to run open (dev). When present, every REST and
+  # MCP request must carry a valid bearer token; identity propagates to the
+  # warehouse via RFC 8693 on-behalf-of.
+  oidc:
+    issuer: "${DI_OIDC_ISSUER}"
+    audience: "warehouse"
+    jwks_url: "${DI_OIDC_JWKS_URL}"        # OR public_key_pem for a static key
+    public_key_pem: ""
+
+governance:
+  tenant_budget_bytes: 0                   # per-tenant cumulative scan-byte cap (0 = unlimited)
+
+server:
+  rest_addr: ":41900"
+  mcp_addr: ":41910"
+  otel: true

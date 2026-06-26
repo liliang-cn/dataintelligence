@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -39,6 +41,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/ingest"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
 	"github.com/liliang-cn/dataintelligence/obs"
@@ -138,26 +141,159 @@ func main() {
 
 // runServe starts the control-plane HTTP API (execution dashboard + query +
 // explorer + lineage).
+// runServe is the production core-service daemon: one config boots the shared
+// engine/grounding/governance core and serves it over two contracts — the
+// versioned REST /v1 API and the MCP server — with OIDC identity propagation,
+// OpenTelemetry, health/readiness, and graceful shutdown.
 func runServe(argv []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
-	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
-	addr := fs.String("addr", envOr("DI_ADDR", ":41953"), "listen address")
+	cfgPath := fs.String("config", envOr("DI_CONFIG", "config.yaml"), "service config YAML")
+	model := fs.String("model", "models/meridian.yaml", "semantic model (used only if no config file)")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN (used only if no config file)")
 	_ = fs.Parse(argv)
 
-	ctx := context.Background()
-	eng, err := engine.New(ctx, *model, *dsn)
+	// Config-driven when the file exists; otherwise synthesize from flags/env so
+	// `di serve` still works out of the box.
+	var cfg *config.Config
+	if _, statErr := os.Stat(*cfgPath); statErr == nil {
+		c, err := config.Load(*cfgPath)
+		if err != nil {
+			fail(err)
+		}
+		cfg = c
+		fmt.Fprintf(os.Stderr, "-- loaded config %s\n", *cfgPath)
+	} else {
+		cfg = &config.Config{
+			Model: *model, Sources: envOr("DI_SOURCES", "examples/meridian/sources.yaml"),
+			Warehouse: config.Warehouse{DSN: *dsn, AppRole: os.Getenv("DI_DB_APP_ROLE"), MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES")},
+			Governance: config.Governance{TenantBudgetBytes: envBytes("DI_TENANT_BUDGET_BYTES")},
+			Server:     config.Server{RESTAddr: envOr("DI_ADDR", ":41900"), MCPAddr: envOr("DI_MCP_ADDR", ":41910"), OTel: os.Getenv("DI_OTEL") != ""},
+		}
+		cfg.Server.RESTAddr = orDefaultStr(cfg.Server.RESTAddr, ":41900")
+		cfg.Server.MCPAddr = orDefaultStr(cfg.Server.MCPAddr, ":41910")
+		fmt.Fprintf(os.Stderr, "-- no config file at %s; using flags/env defaults\n", *cfgPath)
+	}
+
+	if cfg.Server.OTel {
+		if _, err := obs.InitOTel("dataintelligence"); err != nil {
+			fail(err)
+		}
+	}
+
+	// Warehouse options travel via env that engine.New reads.
+	if cfg.Warehouse.AppRole != "" {
+		_ = os.Setenv("DI_DB_APP_ROLE", cfg.Warehouse.AppRole)
+	}
+	if cfg.Warehouse.MaxScanBytes > 0 {
+		_ = os.Setenv("DI_MAX_SCAN_BYTES", fmt.Sprintf("%d", cfg.Warehouse.MaxScanBytes))
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	eng, err := engine.New(ctx, cfg.Model, cfg.Warehouse.DSN)
 	if err != nil {
 		fail(err)
 	}
 	defer eng.Close()
-	fe, _ := newFlowEngine(ctx, *dsn) // flows loaded from files (DI_FLOWS_DIR)
 
-	handler := runtime.NewServer(eng, fe)
-	fmt.Fprintf(os.Stderr, "DataIntelligence API on %s  (GET /metrics /runs /tables /explore?table= /lineage?table= ; POST /query /runs/{id}/{approve|reject|rollback})\n", *addr)
-	if err := http.ListenAndServe(*addr, handler); err != nil {
+	idx := cfg.IndexPath
+	if idx == "" {
+		dir, _ := os.MkdirTemp("", "di-serve-")
+		defer os.RemoveAll(dir)
+		idx = filepath.Join(dir, "idx.db")
+	}
+	gr, err := grounding.New(ctx, eng.Model, idx)
+	if err != nil {
 		fail(err)
 	}
+	defer gr.Close()
+	if bank, err := grounding.LoadExemplars(ctx, "models/exemplars.yaml"); err == nil {
+		gr.WithExemplars(bank)
+	}
+
+	pol := governance.DefaultPolicy()
+	pol.TenantBudgetBytes = cfg.Governance.TenantBudgetBytes
+	verifier, authNote := verifierFromConfig(cfg)
+
+	fe, _ := newFlowEngine(ctx, cfg.Warehouse.DSN)
+
+	// One parent mux: stable /v1 data-plane API + the existing control-plane API.
+	v1 := &runtime.V1{Eng: eng, Gr: gr, Pol: pol, Verify: verifier}
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", v1.Handler())
+	mux.Handle("/", runtime.NewServer(eng, fe))
+
+	rest := &http.Server{Addr: cfg.Server.RESTAddr, Handler: mux}
+	mcpSrv := buildMCPHTTPServer(cfg.Server.MCPAddr, eng, verifier)
+
+	errc := make(chan error, 2)
+	go func() { errc <- serveNamed("REST /v1", rest) }()
+	go func() { errc <- serveNamed("MCP", mcpSrv) }()
+	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
+		cfg.Server.RESTAddr, cfg.Server.MCPAddr, "list_metrics/get_dimensions/query_metric", authNote, cfg.Server.OTel)
+
+	select {
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "\n-- shutting down gracefully…")
+	case err := <-errc:
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = rest.Shutdown(sctx)
+	_ = mcpSrv.Shutdown(sctx)
+}
+
+func serveNamed(name string, s *http.Server) error {
+	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// buildMCPHTTPServer wires the MCP server over streamable HTTP behind bearer auth
+// (or open when verifier is nil) and continues inbound W3C traces.
+func buildMCPHTTPServer(addr string, eng *engine.Engine, verifier auth.TokenVerifier) *http.Server {
+	opts := &mcpserver.Options{Default: mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}}, Burst: 5}
+	handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return mcpserver.NewServer(eng, opts) }, nil)
+	var h http.Handler = handler
+	if verifier != nil {
+		h = auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{Scopes: []string{"metrics:read"}})(handler)
+	}
+	traced := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(obs.ExtractHTTP(r.Context(), r.Header)))
+	})
+	return &http.Server{Addr: addr, Handler: traced}
+}
+
+// verifierFromConfig builds the OIDC verifier from config; nil (open) when no
+// auth block is present.
+func verifierFromConfig(cfg *config.Config) (auth.TokenVerifier, string) {
+	if cfg.Auth.OIDC == nil {
+		return nil, "open (no auth — dev only; set auth.oidc to require tokens)"
+	}
+	o := cfg.Auth.OIDC
+	oc := mcpserver.OIDCConfig{Issuer: o.Issuer, Audience: o.Audience, JWKSURL: o.JWKSURL}
+	if o.PublicKeyPEM != "" {
+		oc.PublicKeyPEM = []byte(o.PublicKeyPEM)
+	}
+	v, err := mcpserver.NewOIDC(oc)
+	if err != nil {
+		fail(err)
+	}
+	src := o.JWKSURL
+	if src == "" {
+		src = "static-key"
+	}
+	return v.Verifier(), fmt.Sprintf("OIDC iss=%q aud=%q keys=%s", o.Issuer, o.Audience, src)
+}
+
+func orDefaultStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // runExplain compiles a semantic query to SQL for a chosen warehouse dialect
