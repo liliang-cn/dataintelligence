@@ -1,0 +1,33 @@
+{{template "head" .}}
+<div class="max-w-3xl mx-auto space-y-4">
+  <div>
+    <h1 class="text-lg font-semibold flex items-center gap-2">Copilot <span class="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent">agent-go</span></h1>
+    <p class="text-sm text-muted">An autonomous agent that calls governed platform tools (describe · health_check · list_metrics · get_dimensions · query_metric) to answer and recommend.</p>
+  </div>
+
+  {{if not .Enabled}}
+  <div class="card bg-amber-950/30 ring-1 ring-amber-900/60 rounded-2xl p-5 text-amber-200 text-sm">
+    Copilot is disabled. Set <code class="text-accent">LLM_BASE_URL / LLM_API_KEY / LLM_MODEL</code> and restart <code>di serve</code>.
+  </div>
+  {{else}}
+  <form hx-post="/ui/copilot/ask" hx-target="#cop-result" hx-swap="innerHTML"
+        class="card bg-panel rounded-2xl ring-1 ring-line p-4 space-y-3">
+    <textarea name="goal" rows="3" class="w-full bg-ink ring-1 ring-line rounded-lg px-3 py-2 text-sm"
+      placeholder="e.g. Health-check the warehouse, then tell me which region has the highest net revenue and recommend a fix.">Describe this warehouse, run a health check for cross-source conflicts, answer which store region has the highest net revenue, then recommend the single highest-priority governed fix.</textarea>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
+        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Run a health check and triage the worst conflict.</button>
+      <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
+        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Revenue and units sold by product category.</button>
+      <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
+        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">What's net revenue by region, and is it trustworthy given data conflicts?</button>
+    </div>
+    <button class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 transition"
+            hx-indicator="#cop-spin">Run agent</button>
+    <div id="cop-spin" class="htmx-indicator text-center text-sm text-muted">🧠 the agent is calling tools… (can take ~10–60s)</div>
+  </form>
+
+  <div id="cop-result"></div>
+  {{end}}
+</div>
+{{template "foot" .}}

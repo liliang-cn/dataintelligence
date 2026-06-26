@@ -13,6 +13,7 @@ import (
 
 	semantic "github.com/liliang-cn/semantic-go"
 
+	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -28,16 +29,24 @@ type UI struct {
 	Eng *engine.Engine
 	Pol governance.Policy
 	Fe  *flow.Engine
+	cop *copilot.Agent // nil when LLM_* is not configured
 	tpl *template.Template
 }
 
-// New parses the embedded templates.
+// New parses the embedded templates and, when LLM creds are present, wires the
+// agent-go copilot.
 func New(eng *engine.Engine, pol governance.Policy, fe *flow.Engine) (*UI, error) {
 	tpl, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &UI{Eng: eng, Pol: pol, Fe: fe, tpl: tpl}, nil
+	u := &UI{Eng: eng, Pol: pol, Fe: fe, tpl: tpl}
+	if copilot.Available() {
+		if a, aerr := copilot.New(eng, pol, "examples/meridian/conflicts.yaml"); aerr == nil {
+			u.cop = a
+		}
+	}
+	return u, nil
 }
 
 // Mount registers the console routes on mux under /ui.
@@ -52,6 +61,35 @@ func (u *UI) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/runs", u.runs)
 	mux.HandleFunc("POST /ui/runs/{id}/{action}", u.runAction)
 	mux.HandleFunc("GET /ui/traces", u.traces)
+	mux.HandleFunc("GET /ui/copilot", u.copilotPage)
+	mux.HandleFunc("POST /ui/copilot/ask", u.copilotAsk)
+}
+
+// --- Copilot (agent-go) ---
+
+func (u *UI) copilotPage(w http.ResponseWriter, _ *http.Request) {
+	u.render(w, "copilot.html", page("copilot", map[string]any{"Enabled": u.cop != nil}))
+}
+
+func (u *UI) copilotAsk(w http.ResponseWriter, r *http.Request) {
+	if u.cop == nil {
+		u.render(w, "copilot_result.html", map[string]any{"Error": "Copilot disabled — set LLM_BASE_URL/LLM_API_KEY/LLM_MODEL and restart."})
+		return
+	}
+	_ = r.ParseForm()
+	goal := r.FormValue("goal")
+	if goal == "" {
+		u.render(w, "copilot_result.html", map[string]any{"Error": "ask something"})
+		return
+	}
+	res, err := u.cop.Run(r.Context(), goal)
+	if err != nil {
+		u.render(w, "copilot_result.html", map[string]any{"Error": err.Error()})
+		return
+	}
+	u.render(w, "copilot_result.html", map[string]any{
+		"Answer": res.Answer, "Tools": res.Tools, "ToolCalls": res.ToolCalls,
+	})
 }
 
 // page wraps page data with the nav-active marker shared by the layout.

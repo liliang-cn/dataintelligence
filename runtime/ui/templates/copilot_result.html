@@ -1,0 +1,12 @@
+{{if .Error}}
+<div class="card bg-rose-950/40 ring-1 ring-rose-800 rounded-2xl p-5 text-rose-300 text-sm">{{.Error}}</div>
+{{else}}
+<div class="card bg-panel rounded-2xl ring-1 ring-line overflow-hidden">
+  <div class="flex flex-wrap items-center gap-2 px-4 sm:px-5 py-3 border-b border-line">
+    <span class="text-sm font-medium">agent answer</span>
+    <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted">{{.ToolCalls}} tool calls</span>
+    {{range .Tools}}<span class="text-[11px] px-2 py-0.5 rounded-full ring-1 ring-accent/30 text-accent">{{.}}</span>{{end}}
+  </div>
+  <div class="px-4 sm:px-5 py-4 text-sm leading-relaxed whitespace-pre-wrap break-words">{{.Answer}}</div>
+</div>
+{{end}}

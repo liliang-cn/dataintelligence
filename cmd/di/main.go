@@ -37,6 +37,7 @@ import (
 
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/convo"
+	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/critic"
 	"github.com/liliang-cn/dataintelligence/destinations"
 	"github.com/liliang-cn/dataintelligence/engine"
@@ -457,8 +458,7 @@ func runCopilot(argv []string) {
 	checks := fs.String("checks", "examples/meridian/conflicts.yaml", "conflict checks YAML")
 	_ = fs.Parse(argv)
 
-	base, key, mdl := os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL")
-	if key == "" {
+	if !copilot.Available() {
 		fail(fmt.Errorf("copilot is the AI showcase — set LLM_BASE_URL/LLM_API_KEY/LLM_MODEL first"))
 	}
 	ctx := context.Background()
@@ -467,107 +467,20 @@ func runCopilot(argv []string) {
 		fail(err)
 	}
 	defer eng.Close()
-	pol := governance.DefaultPolicy()
 
-	llmp, err := providers.NewOpenAILLMProvider(&domain.OpenAIProviderConfig{BaseURL: base, APIKey: key, LLMModel: mdl})
+	agent, err := copilot.New(eng, governance.DefaultPolicy(), *checks)
 	if err != nil {
 		fail(err)
 	}
-
-	// Platform capabilities exposed to the agent as governed tools.
-	tools := []*agentpkg.Tool{
-		agentpkg.BuildTool("describe_warehouse").
-			Description("List the warehouse tables and their column counts.").
-			Handler(func(ctx context.Context, _ map[string]any) (any, error) {
-				s, err := modelgen.Introspect(ctx, eng.WH)
-				if err != nil {
-					return nil, err
-				}
-				out := []string{}
-				for _, t := range s.Tables {
-					out = append(out, fmt.Sprintf("%s (%d cols)", t.Name, len(t.Columns)))
-				}
-				return out, nil
-			}).Build(),
-
-		agentpkg.BuildTool("list_metrics").
-			Description("List available semantic metrics with descriptions.").
-			Handler(func(_ context.Context, _ map[string]any) (any, error) {
-				out := []string{}
-				for i := range eng.Model.Metrics {
-					m := &eng.Model.Metrics[i]
-					out = append(out, m.Name+": "+m.Description)
-				}
-				return out, nil
-			}).Build(),
-
-		agentpkg.BuildTool("get_dimensions").
-			Description("Valid dimensions to group a metric by WITHOUT a fan-out. Call before query_metric.").
-			Param("metric", agentpkg.TypeString, "the metric name", agentpkg.Required()).
-			Handler(func(_ context.Context, a map[string]any) (any, error) {
-				return eng.Model.DimensionsFor(fmt.Sprint(a["metric"]))
-			}).Build(),
-
-		agentpkg.BuildTool("query_metric").
-			Description("Run a governed semantic query. Returns rows. RBAC/masking/RLS apply by role.").
-			Param("metrics", agentpkg.TypeString, "comma-separated metric names", agentpkg.Required()).
-			Param("group_by", agentpkg.TypeString, "comma-separated dimension names (optional)").
-			Param("role", agentpkg.TypeString, "caller role: analyst|finance|manager|admin").
-			Handler(func(ctx context.Context, a map[string]any) (any, error) {
-				role := fmt.Sprint(a["role"])
-				if role == "" || role == "<nil>" {
-					role = "finance"
-				}
-				q := semantic.Query{Metrics: split(fmt.Sprint(a["metrics"])), GroupBy: split(fmt.Sprint(a["group_by"]))}
-				ans, err := governance.Query(ctx, eng, q, governance.Principal{User: "copilot", Role: role, Attrs: map[string]string{"region": "South"}}, pol)
-				if err != nil {
-					return "refused by governance: " + err.Error(), nil
-				}
-				return map[string]any{"columns": ans.Columns, "rows": ans.Rows}, nil
-			}).Build(),
-
-		agentpkg.BuildTool("health_check").
-			Description("Detect cross-source data conflicts (orphans, price drift, oversell). Returns conflicts found.").
-			Handler(func(ctx context.Context, _ map[string]any) (any, error) {
-				cs, err := reconcile.Load(*checks)
-				if err != nil {
-					return nil, err
-				}
-				results, err := reconcile.Run(ctx, eng.WH, cs, nil) // agent itself is the LLM; no nested triage
-				if err != nil {
-					return nil, err
-				}
-				out := []map[string]any{}
-				for _, r := range results {
-					out = append(out, map[string]any{"check": r.Check.Name, "severity": r.Check.Severity, "conflicts": r.Count()})
-				}
-				return out, nil
-			}).Build(),
-	}
-
-	const sys = `You are the DataIntelligence copilot for a data platform. Use the tools to fulfill the goal.
-Plan: describe_warehouse to orient; health_check for data conflicts; list_metrics then get_dimensions
-before query_metric; never invent numbers — only report tool results. End with a short summary and ONE
-recommended next step that must go through governed propose→approve→commit (never auto-applied).`
-
-	svc, err := agentpkg.New("di-copilot").
-		WithLLM(llmp).
-		WithPTC(false).
-		WithSystemPrompt(sys).
-		WithTools(tools...).
-		Build()
-	if err != nil {
-		fail(err)
-	}
-	defer svc.Close()
+	defer agent.Close()
 
 	fmt.Fprintf(os.Stderr, "-- copilot goal: %s\n\n", *goal)
-	res, err := svc.Chat(ctx, *goal)
+	res, err := agent.Run(ctx, *goal)
 	if err != nil {
 		fail(err)
 	}
-	fmt.Printf("%v\n", res.FinalResult)
-	fmt.Fprintf(os.Stderr, "\n-- agent: steps=%d tool_calls=%d tools=%v\n", res.StepsTotal, res.ToolCalls, res.ToolsUsed)
+	fmt.Printf("%s\n", res.Answer)
+	fmt.Fprintf(os.Stderr, "\n-- agent: steps=%d tool_calls=%d tools=%v\n", res.Steps, res.ToolCalls, res.Tools)
 }
 
 // runReconcile detects cross-source data conflicts (deterministic SQL checks)

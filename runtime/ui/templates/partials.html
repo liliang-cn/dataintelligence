@@ -39,6 +39,7 @@
     </a>
     <nav class="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
       {{$a := .Active}}
+      <a href="/ui/copilot" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "copilot"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">copilot</a>
       <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">query</a>
       <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">model</a>
       <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">eval</a>
