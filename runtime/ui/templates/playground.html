@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataIntelligence · Console</title>
+  <script src="/ui/static/tailwind.js"></script>
+  <script src="/ui/static/htmx.min.js" defer></script>
+  <script src="/ui/static/alpine.min.js" defer></script>
+  <script src="/ui/static/gsap.min.js"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { ink: '#0b0f17', panel: '#121826', accent: '#6ea8fe' } } } };
+    // Animate freshly-swapped results in.
+    document.addEventListener('htmx:afterSwap', (e) => {
+      if (e.target.id !== 'result') return;
+      gsap.from('#result .card', { opacity: 0, y: 16, duration: 0.4, ease: 'power2.out' });
+      gsap.from('#result tbody tr', { opacity: 0, y: 8, duration: 0.3, stagger: 0.03, ease: 'power1.out', delay: 0.1 });
+    });
+  </script>
+</head>
+<body class="h-full bg-ink text-slate-200" style="font-family: ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <header class="border-b border-slate-800 px-4 sm:px-6 py-3 sm:py-4 flex items-center gap-3 sticky top-0 bg-ink/95 backdrop-blur z-10">
+    <div class="h-7 w-7 rounded-lg bg-accent/20 ring-1 ring-accent/40 grid place-items-center text-accent font-bold">DI</div>
+    <div>
+      <div class="font-semibold tracking-tight">DataIntelligence</div>
+      <div class="text-xs text-slate-500">governed query console · /ui</div>
+    </div>
+    <a href="/v1/healthz" class="ml-auto text-xs text-slate-500 hover:text-accent">REST /v1</a>
+  </header>
+
+  <main class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4 sm:gap-6 p-4 sm:p-6">
+    <!-- query builder -->
+    <form hx-post="/ui/query" hx-target="#result" hx-swap="innerHTML"
+          class="bg-panel rounded-2xl ring-1 ring-slate-800 p-4 sm:p-5 space-y-5 self-start">
+      <div>
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Metrics</div>
+        <div class="space-y-1 max-h-72 sm:max-h-60 overflow-auto pr-1">
+          {{range .Metrics}}
+          <label class="flex items-start gap-2.5 text-sm hover:bg-slate-800/40 rounded-lg px-2 py-2 sm:py-1 cursor-pointer">
+            <input type="checkbox" name="metrics" value="{{.Name}}" class="mt-1 h-4 w-4 accent-accent">
+            <span><span class="font-medium">{{.Name}}</span>
+              {{if .Description}}<span class="block text-xs text-slate-500">{{.Description}}</span>{{end}}</span>
+          </label>
+          {{end}}
+        </div>
+      </div>
+
+      <div>
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Group by</div>
+        <div class="flex flex-wrap gap-2">
+          {{range .Dimensions}}
+          <label class="text-xs px-3 py-1.5 sm:py-1 rounded-full ring-1 ring-slate-700 hover:ring-accent cursor-pointer select-none has-[:checked]:ring-accent has-[:checked]:bg-accent/10">
+            <input type="checkbox" name="dims" value="{{.}}" class="hidden peer">
+            <span class="peer-checked:text-accent">{{.}}</span>
+          </label>
+          {{end}}
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-sm">
+          <span class="block text-xs uppercase tracking-wide text-slate-500 mb-1">Role</span>
+          <select name="role" class="w-full bg-ink ring-1 ring-slate-700 rounded-lg px-2 py-1.5 text-sm">
+            {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+          </select>
+        </label>
+        <label class="text-sm">
+          <span class="block text-xs uppercase tracking-wide text-slate-500 mb-1">Time grain</span>
+          <select name="grain" class="w-full bg-ink ring-1 ring-slate-700 rounded-lg px-2 py-1.5 text-sm">
+            <option value="">none</option><option>day</option><option>month</option><option>quarter</option><option>year</option>
+          </select>
+        </label>
+      </div>
+
+      <button class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 active:brightness-95 transition"
+              hx-indicator="#spin">Run query</button>
+      <div id="spin" class="htmx-indicator text-center text-xs text-slate-500">running…</div>
+    </form>
+
+    <!-- result -->
+    <section id="result" class="min-h-[200px]">
+      <div class="card bg-panel/50 rounded-2xl ring-1 ring-dashed ring-slate-800 p-10 text-center text-slate-500">
+        Pick metrics and Run. The query is compiled to fan-out-safe SQL and governed by role.
+      </div>
+    </section>
+  </main>
+</body>
+</html>

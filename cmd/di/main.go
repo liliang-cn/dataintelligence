@@ -51,6 +51,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/nodes"
 	"github.com/liliang-cn/dataintelligence/rollout"
 	"github.com/liliang-cn/dataintelligence/runtime"
+	"github.com/liliang-cn/dataintelligence/runtime/ui"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 	"github.com/liliang-cn/dataintelligence/writeback"
 )
@@ -220,10 +221,16 @@ func runServe(argv []string) {
 
 	fe, _ := newFlowEngine(ctx, cfg.Warehouse.DSN)
 
-	// One parent mux: stable /v1 data-plane API + the existing control-plane API.
+	// One parent mux: stable /v1 data-plane API + the existing control-plane API
+	// + the embedded web console at /ui.
 	v1 := &runtime.V1{Eng: eng, Gr: gr, Pol: pol, Verify: verifier}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
+	if console, uerr := ui.New(eng, pol); uerr == nil {
+		console.Mount(mux)
+	} else {
+		fmt.Fprintf(os.Stderr, "-- web console disabled: %v\n", uerr)
+	}
 	mux.Handle("/", runtime.NewServer(eng, fe))
 
 	rest := &http.Server{Addr: cfg.Server.RESTAddr, Handler: mux}
@@ -232,8 +239,8 @@ func runServe(argv []string) {
 	errc := make(chan error, 2)
 	go func() { errc <- serveNamed("REST /v1", rest) }()
 	go func() { errc <- serveNamed("MCP", mcpSrv) }()
-	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
-		cfg.Server.RESTAddr, cfg.Server.MCPAddr, "list_metrics/get_dimensions/query_metric", authNote, cfg.Server.OTel)
+	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/ui\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
+		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, "list_metrics/get_dimensions/query_metric", authNote, cfg.Server.OTel)
 
 	select {
 	case <-ctx.Done():
