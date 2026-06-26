@@ -123,7 +123,7 @@ Killing hallucinated joins by encoding relationships once.
 
 ## Module 6. Choosing the Engine
 
-> **Status:** 🟡 Partial — Dialect abstraction + Postgres; Snowflake/Databricks dialects not built. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — `Dialect` abstraction in `semantic-go` with **Postgres, Snowflake, Databricks (Spark SQL), and ANSI** dialects + `DialectByName`; each shapes the SAME semantic query into engine-correct SQL (quoting `"`/`` ` ``, `DATE_TRUNC` vs `date_trunc('UPPER')`, `$N`/`:N`/`?` binds, `IS NOT DISTINCT FROM` vs `<=>`). `di explain -dialect <name>` compiles without executing — verified across all three; semantic-go dialect tests pass. (Published in semantic-go v0.1.2.) · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 The semantic-layer decision spine.
 

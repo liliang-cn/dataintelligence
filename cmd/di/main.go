@@ -120,6 +120,8 @@ func main() {
 		runSource(os.Args[2:])
 	case "model":
 		runModel(os.Args[2:])
+	case "explain":
+		runExplain(os.Args[2:])
 	case "threats":
 		runThreats(os.Args[2:])
 	case "rollout":
@@ -155,6 +157,38 @@ func runServe(argv []string) {
 	fmt.Fprintf(os.Stderr, "DataIntelligence API on %s  (GET /metrics /runs /tables /explore?table= /lineage?table= ; POST /query /runs/{id}/{approve|reject|rollback})\n", *addr)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		fail(err)
+	}
+}
+
+// runExplain compiles a semantic query to SQL for a chosen warehouse dialect
+// WITHOUT executing it (M6): the same intent → Postgres / Snowflake / Databricks
+// SQL, proving the dialect abstraction. No warehouse connection needed.
+func runExplain(argv []string) {
+	fs := flag.NewFlagSet("explain", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dialect := fs.String("dialect", "postgres", "postgres | snowflake | databricks | ansi")
+	metrics := fs.String("metrics", "", "comma-separated metrics (required)")
+	by := fs.String("by", "", "group-by dimensions")
+	grain := fs.String("grain", "", "time grain (day|month|quarter|year)")
+	_ = fs.Parse(argv)
+	if *metrics == "" {
+		fail(fmt.Errorf("explain: -metrics is required"))
+	}
+	d, ok := semantic.DialectByName(*dialect)
+	if !ok {
+		fail(fmt.Errorf("unknown dialect %q (postgres|snowflake|databricks|ansi)", *dialect))
+	}
+	m, err := semantic.LoadFile(*model)
+	if err != nil {
+		fail(err)
+	}
+	c, err := semantic.Compile(m, semantic.Query{Metrics: split(*metrics), GroupBy: split(*by), TimeGrain: *grain}, d)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("-- dialect: %s\n%s\n", d.Name(), c.SQL)
+	if len(c.Args) > 0 {
+		fmt.Printf("-- args: %v\n", c.Args)
 	}
 }
 
