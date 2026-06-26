@@ -96,7 +96,7 @@ A contract between business meaning and SQL, holding one governed definition eve
 
 ## Module 4. Modeling Metrics & Dimensions
 
-> **Status:** 🟡 Mostly done — simple/ratio/derived + **time intelligence** (rolling/cumulative/delta/prior window metrics in the core `semantic-go` compiler). Missing: grain-to-date period reset, additivity enforcement, metadata review gate. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — simple/ratio/derived + **time intelligence** (rolling/cumulative/delta/prior) + **grain-to-date** (`reset: year|quarter|month` → window restarts each period; `revenue_ytd` verified resetting to 245,384.21 at 2025-01) + **additivity enforcement** (`additivity: additive|semi_additive|non_additive`, inferred from agg/formula; the compiler refuses a window-sum over a non-additive measure) + **metadata gate** (`semantic.Lint` / `di model lint`, exits 1 on a metric missing its description — CI-gateable). All in the neutral `semantic-go` core; Meridian only supplies config. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 A metric carries its grain and aggregation so totals never double count.
 

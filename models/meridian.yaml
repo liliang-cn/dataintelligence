@@ -53,6 +53,7 @@ metrics:
     entity: order
     agg: count_distinct
     expr: "order_id"
+    additivity: non_additive   # distinct counts don't add across slices
 
   - name: refund_total
     description: "Total refunded amount."
@@ -71,6 +72,7 @@ metrics:
     description: "Average revenue per order (AOV). A ratio — never summed."
     synonyms: [aov, average order value]
     formula: "total_revenue / nullif(order_count, 0)"
+    additivity: non_additive   # ratios can't be summed/rolled up over time
 
   # Time intelligence (window metrics; require a time dimension in group_by).
   - name: revenue_rolling_3
@@ -86,7 +88,14 @@ metrics:
     window: "delta:1"
 
   - name: revenue_cumulative
-    description: "Cumulative running total of revenue."
-    synonyms: [running total, ytd revenue]
+    description: "Cumulative running total of revenue over the whole series (never resets)."
+    synonyms: [running total, lifetime revenue]
     of: total_revenue
     window: "cumulative"
+
+  - name: revenue_ytd
+    description: "Year-to-date revenue: running total that restarts each calendar year."
+    synonyms: [ytd revenue, year to date, ytd]
+    of: total_revenue
+    window: "cumulative"
+    reset: year

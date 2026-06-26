@@ -106,8 +106,10 @@ func main() {
 		runWebhook(os.Args[2:])
 	case "source":
 		runSource(os.Args[2:])
+	case "model":
+		runModel(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, model, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
 		os.Exit(2)
 	}
 }
@@ -133,6 +135,36 @@ func runServe(argv []string) {
 	fmt.Fprintf(os.Stderr, "DataIntelligence API on %s  (GET /metrics /runs /tables /explore?table= /lineage?table= ; POST /query /runs/{id}/{approve|reject|rollback})\n", *addr)
 	if err := http.ListenAndServe(*addr, handler); err != nil {
 		fail(err)
+	}
+}
+
+// runModel is the metadata gate (M4): `di model lint` enforces that every
+// metric describes itself and declares how it rolls up. Exits 1 on any error so
+// it can guard a merge in CI. The rules live in the neutral core (semantic.Lint).
+func runModel(argv []string) {
+	if len(argv) == 0 || argv[0] != "lint" {
+		fmt.Fprintln(os.Stderr, "usage: di model lint [-model path]")
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("model lint", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	_ = fs.Parse(argv[1:])
+
+	m, err := semantic.LoadFile(*model)
+	if err != nil {
+		fail(err)
+	}
+	issues := semantic.Lint(m)
+	errs := 0
+	for _, i := range issues {
+		fmt.Println(i)
+		if i.Severity == "error" {
+			errs++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "-- lint %s: %d issue(s), %d error(s)\n", *model, len(issues), errs)
+	if errs > 0 {
+		os.Exit(1)
 	}
 }
 
