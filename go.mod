@@ -8,7 +8,7 @@ require (
 	github.com/liliang-cn/agent-go/v2 v2.92.0
 	github.com/liliang-cn/cortexdb/v2 v2.35.0
 	github.com/liliang-cn/eval-go v0.1.0
-	github.com/liliang-cn/semantic-go v0.1.0
+	github.com/liliang-cn/semantic-go v0.1.1
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/redis/go-redis/v9 v9.21.0
