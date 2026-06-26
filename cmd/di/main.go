@@ -126,6 +126,8 @@ func main() {
 		runRollout(os.Args[2:])
 	case "pentest":
 		runPentest(os.Args[2:])
+	case "spend":
+		runSpend(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q (have: query, ask, chat, chain, propose, proposals, approve, reject, revert, ingest, mcp, token, obo, crm, webhook, source, model, flow, node, serve, eval, nleval, exemplar, dashboard, agent, shadow, cdc)\n", os.Args[1])
 		os.Exit(2)
@@ -183,6 +185,52 @@ func runModel(argv []string) {
 	fmt.Fprintf(os.Stderr, "-- lint %s: %d issue(s), %d error(s)\n", *model, len(issues), errs)
 	if errs > 0 {
 		os.Exit(1)
+	}
+}
+
+// runSpend shows or resets the per-tenant spend ledger (M13/M21):
+//
+//	di spend            # list cumulative cost per tenant
+//	di spend reset -tenant acme
+func runSpend(argv []string) {
+	fs := flag.NewFlagSet("spend", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	tenant := fs.String("tenant", "", "tenant id (for reset)")
+	reset := len(argv) > 0 && argv[0] == "reset"
+	if reset {
+		argv = argv[1:]
+	}
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+	ledger := governance.NewSpendLedger(wh)
+
+	if reset {
+		if *tenant == "" {
+			fail(fmt.Errorf("reset needs -tenant"))
+		}
+		if err := ledger.Reset(ctx, *tenant); err != nil {
+			fail(err)
+		}
+		fmt.Printf("reset spend for %q\n", *tenant)
+		return
+	}
+	rows, err := ledger.All(ctx)
+	if err != nil {
+		fail(err)
+	}
+	if len(rows) == 0 {
+		fmt.Println("(no spend recorded)")
+		return
+	}
+	fmt.Printf("%-16s %14s %9s\n", "tenant", "bytes", "queries")
+	for _, r := range rows {
+		fmt.Printf("%-16s %14d %9d\n", r.Tenant, r.Bytes, r.Queries)
 	}
 }
 
@@ -366,6 +414,7 @@ func runRollout(argv []string) {
 	model := fs.String("model", "", "model YAML path (register)")
 	pct := fs.Int("pct", 0, "canary percentage 0..100")
 	n := fs.Int("n", 1000, "number of synthetic requests (simulate)")
+	minHealth := fs.Float64("min", 1.0, "canary health floor (watch): auto-rollback below this")
 	_ = fs.Parse(rest)
 
 	ctx := context.Background()
@@ -438,6 +487,35 @@ func runRollout(argv []string) {
 		for k, c := range counts {
 			fmt.Printf("  %-24s %5d  (%.1f%%)\n", k, c, 100*float64(c)/float64(*n))
 		}
+	case "watch":
+		// Health-check the live canary; auto-rollback if it regresses below the
+		// floor — the unattended guard so a bad canary self-heals.
+		cv, err := reg.CanaryVersion(ctx)
+		if err != nil {
+			fail(fmt.Errorf("no canary to watch: %w", err))
+		}
+		score, failed, err := healthScore(ctx, cv.Path, *dsn)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("canary %s health=%.0f%% (floor %.0f%%)", cv.Name, score*100, *minHealth*100)
+		if len(failed) > 0 {
+			fmt.Printf(" · failing: %v", failed)
+		}
+		fmt.Println()
+		if score < *minHealth {
+			rb, rerr := reg.Rollback(ctx)
+			if rerr != nil {
+				fail(rerr)
+			}
+			if rb != nil {
+				fmt.Printf("REGRESSION → auto-rolled back; %s is ACTIVE, canary demoted\n", rb.Name)
+			} else {
+				fmt.Println("REGRESSION → canary demoted (no active version)")
+			}
+			os.Exit(1)
+		}
+		fmt.Println("canary healthy — safe to keep promoting")
 	default:
 		fail(fmt.Errorf("unknown rollout subcommand %q", sub))
 	}
@@ -488,17 +566,7 @@ func runEval(argv []string) {
 	}
 	defer eng.Close()
 
-	cases := []struct {
-		name    string
-		metric  string
-		control string
-	}{
-		{"total_revenue", "total_revenue", "SELECT sum(quantity*unit_price) FROM order_items"},
-		{"units_sold", "units_sold", "SELECT sum(quantity) FROM order_items"},
-		{"order_count", "order_count", "SELECT count(DISTINCT order_id) FROM orders"},
-		{"refund_total", "refund_total", "SELECT sum(refund_amount) FROM refunds"},
-		{"net_revenue", "net_revenue", "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"},
-	}
+	cases := reconCases()
 	pass := 0
 	for _, c := range cases {
 		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.metric}})
@@ -523,6 +591,50 @@ func runEval(argv []string) {
 	if pass != len(cases) {
 		os.Exit(1) // regression / drift detected
 	}
+}
+
+type reconCase struct{ name, metric, control string }
+
+// reconCases are the deterministic metric→control reconciliation checks shared
+// by `di eval` and the canary health watcher.
+func reconCases() []reconCase {
+	return []reconCase{
+		{"total_revenue", "total_revenue", "SELECT sum(quantity*unit_price) FROM order_items"},
+		{"units_sold", "units_sold", "SELECT sum(quantity) FROM order_items"},
+		{"order_count", "order_count", "SELECT count(DISTINCT order_id) FROM orders"},
+		{"refund_total", "refund_total", "SELECT sum(refund_amount) FROM refunds"},
+		{"net_revenue", "net_revenue", "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"},
+	}
+}
+
+// healthScore runs the reconciliation checks against a model and returns the
+// fraction that match their control query — the canary's health signal.
+func healthScore(ctx context.Context, modelPath, dsn string) (float64, []string, error) {
+	eng, err := engine.New(ctx, modelPath, dsn)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer eng.Close()
+	cases := reconCases()
+	pass := 0
+	var failed []string
+	for _, c := range cases {
+		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.metric}})
+		if err != nil {
+			failed = append(failed, c.name)
+			continue
+		}
+		ctrl, err := eng.WH.Query(ctx, c.control)
+		if err != nil {
+			return 0, nil, err
+		}
+		if floatEq(scalar(ans.Rows), scalar(ctrl.Rows)) {
+			pass++
+		} else {
+			failed = append(failed, c.name)
+		}
+	}
+	return float64(pass) / float64(len(cases)), failed, nil
 }
 
 // runNLEval is the natural-language evaluation closed-loop:
@@ -1946,6 +2058,7 @@ func runQuery(argv []string) {
 	limit := fs.Int("limit", 0, "row limit")
 	role := fs.String("role", "analyst", "caller role (governance: RBAC + masking)")
 	region := fs.String("region", "", "caller region attribute (row-level security for role=manager)")
+	tenant := fs.String("tenant", "", "tenant id (per-tenant spend budget)")
 	to := fs.String("to", "", "destination sink: log | json:path | table:name | alert:col:min:max")
 	_ = fs.Parse(argv)
 
@@ -1961,15 +2074,17 @@ func runQuery(argv []string) {
 	defer eng.Close()
 
 	principal := governance.Principal{User: "cli", Role: *role}
-	if *region != "" {
-		principal.Attrs = map[string]string{"region": *region}
+	if *region != "" || *tenant != "" {
+		principal.Attrs = map[string]string{"region": *region, "tenant": *tenant}
 	}
+	pol := governance.DefaultPolicy()
+	pol.TenantBudgetBytes = envBytes("DI_TENANT_BUDGET_BYTES") // 0 = unlimited
 	ans, err := governance.Query(ctx, eng, semantic.Query{
 		Metrics:   split(*metrics),
 		GroupBy:   split(*by),
 		TimeGrain: *grain,
 		Limit:     *limit,
-	}, principal, governance.DefaultPolicy())
+	}, principal, pol)
 	if err != nil {
 		fail(err)
 	}
@@ -2072,6 +2187,19 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBytes reads a byte budget from the environment, 0 (unlimited) when unset.
+func envBytes(k string) int64 {
+	v := os.Getenv(k)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func fail(err error) {

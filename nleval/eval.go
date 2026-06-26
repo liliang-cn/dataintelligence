@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -42,10 +43,11 @@ type CaseResult struct {
 	Clarify   *Check `json:"clarify,omitempty"`   // ambiguity asked back
 	Refusal   *Check `json:"refusal,omitempty"`   // governance refused
 
-	Answer  string   `json:"-"` // rendered answer (for the eval-go judge layer)
-	Context []string `json:"-"` // metric descriptions the answer is grounded on
-	Skipped bool     `json:"skipped"`
-	Passed  bool     `json:"passed"`
+	Answer    string   `json:"-"` // rendered answer (for the eval-go judge layer)
+	Context   []string `json:"-"` // metric descriptions the answer is grounded on
+	Skipped   bool     `json:"skipped"`
+	Passed    bool     `json:"passed"`
+	LatencyMs int64    `json:"latency_ms"` // end-to-end ground→govern→execute time
 }
 
 // Run grades every case. llmWired controls whether needs_llm cases are included.
@@ -55,7 +57,10 @@ func (g *Grader) Run(ctx context.Context, ds *Dataset, llmWired bool) *Report {
 	}
 	rep := &Report{Tol: g.Tol}
 	for _, c := range ds.Cases {
-		rep.Cases = append(rep.Cases, g.grade(ctx, c, llmWired))
+		t0 := time.Now()
+		cr := g.grade(ctx, c, llmWired)
+		cr.LatencyMs = time.Since(t0).Milliseconds()
+		rep.Cases = append(rep.Cases, cr)
 	}
 	rep.finalize()
 	return rep

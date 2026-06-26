@@ -73,10 +73,24 @@ func (r *Registry) Register(ctx context.Context, name, path string) (*Version, e
 	return v, r.save(ctx, v)
 }
 
-// Canary marks a candidate as serving pct% of traffic.
+// Canary marks a candidate as serving pct% of traffic. Only one version may be
+// canary at a time, so any existing canary is demoted back to candidate first.
 func (r *Registry) Canary(ctx context.Context, name string, pct int) (*Version, error) {
 	if pct < 0 || pct > 100 {
 		return nil, fmt.Errorf("canary pct must be 0..100")
+	}
+	all, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range all {
+		if v.Status == StatusCanary && v.Name != name {
+			v.Status = StatusCandidate
+			v.CanaryPct = 0
+			if err := r.save(ctx, v); err != nil {
+				return nil, err
+			}
+		}
 	}
 	v, err := r.Get(ctx, name)
 	if err != nil {
@@ -111,36 +125,33 @@ func (r *Registry) Promote(ctx context.Context, name string) (changed []string, 
 	return changed, r.save(ctx, cand)
 }
 
-// Rollback retires the current canary (or active) and restores the most recent
-// retired version to active — the panic button when a canary misbehaves.
+// Rollback is the panic button: demote the current canary back to candidate,
+// and if there is no active version left, restore the most recently retired one.
+// Returns the version that ends up active (nil if the active was untouched).
 func (r *Registry) Rollback(ctx context.Context) (*Version, error) {
 	all, err := r.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var canary, retired *Version
 	for _, v := range all {
-		switch v.Status {
-		case StatusCanary, StatusActive:
-			if canary == nil || v.Status == StatusCanary {
-				canary = v
-			}
-		case StatusRetired:
-			if retired == nil {
-				retired = v // List is newest-first
+		if v.Status == StatusCanary {
+			v.Status = StatusCandidate
+			v.CanaryPct = 0
+			if err := r.save(ctx, v); err != nil {
+				return nil, err
 			}
 		}
 	}
-	if canary != nil && canary.Status == StatusCanary {
-		canary.Status = StatusCandidate
-		canary.CanaryPct = 0
-		if err := r.save(ctx, canary); err != nil {
-			return nil, err
-		}
+	// If an active version still stands, the demotion is enough.
+	if active, err := r.Active(ctx); err == nil {
+		return active, nil
 	}
-	if retired != nil {
-		retired.Status = StatusActive
-		return retired, r.save(ctx, retired)
+	// Otherwise promote the newest retired version back to active.
+	for _, v := range all {
+		if v.Status == StatusRetired {
+			v.Status = StatusActive
+			return v, r.save(ctx, v)
+		}
 	}
 	return nil, nil
 }
@@ -150,7 +161,7 @@ func (r *Registry) Rollback(ctx context.Context) (*Version, error) {
 // hash(key) falls in the canary's percentage band, else the active version.
 func (r *Registry) Route(ctx context.Context, key string) (*Version, error) {
 	active, _ := r.Active(ctx)
-	canary, _ := r.canaryVersion(ctx)
+	canary, _ := r.CanaryVersion(ctx)
 	if canary != nil && bucket(key) < canary.CanaryPct {
 		return canary, nil
 	}
@@ -168,7 +179,9 @@ func bucket(key string) int {
 }
 
 func (r *Registry) Active(ctx context.Context) (*Version, error) { return r.byStatus(ctx, StatusActive) }
-func (r *Registry) canaryVersion(ctx context.Context) (*Version, error) {
+
+// CanaryVersion returns the version currently serving canary traffic.
+func (r *Registry) CanaryVersion(ctx context.Context) (*Version, error) {
 	return r.byStatus(ctx, StatusCanary)
 }
 

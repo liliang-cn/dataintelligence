@@ -22,6 +22,11 @@ type Report struct {
 	Passed  int     `json:"passed"`  //
 	Skipped int     `json:"skipped"` //
 	Acc     float64 `json:"accuracy"`
+
+	// Cost benchmark: end-to-end latency across graded cases.
+	P50Ms int64 `json:"p50_ms"`
+	P95Ms int64 `json:"p95_ms"`
+	MaxMs int64 `json:"max_ms"`
 }
 
 // CategoryStat is per-category accuracy (the per-category floor is checked here).
@@ -76,6 +81,22 @@ func (r *Report) finalize() {
 	}
 	if r.Total > 0 {
 		r.Acc = float64(r.Passed) / float64(r.Total)
+	}
+
+	// Latency percentiles over graded cases (the cost benchmark).
+	var lat []int64
+	for _, c := range r.Cases {
+		if !c.Skipped {
+			lat = append(lat, c.LatencyMs)
+		}
+	}
+	if len(lat) > 0 {
+		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+		pct := func(p float64) int64 {
+			idx := int(p * float64(len(lat)-1))
+			return lat[idx]
+		}
+		r.P50Ms, r.P95Ms, r.MaxMs = pct(0.50), pct(0.95), lat[len(lat)-1]
 	}
 
 	sort.Strings(catOrder)
@@ -169,6 +190,9 @@ func (r *Report) WriteConsole(w io.Writer) {
 		}
 		fmt.Fprintf(w, "  %s %-22s → %-22s ×%d\n", mark, e.Expected, e.Predicted, e.Count)
 	}
+
+	fmt.Fprintln(w, "\n--- cost benchmark (end-to-end latency) ---")
+	fmt.Fprintf(w, "  p50 %dms · p95 %dms · max %dms\n", r.P50Ms, r.P95Ms, r.MaxMs)
 
 	fmt.Fprintf(w, "\nOverall: %d/%d (%.0f%%) graded · %d skipped\n", r.Passed, r.Total, r.Acc*100, r.Skipped)
 }

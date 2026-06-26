@@ -42,6 +42,12 @@ type Policy struct {
 	KAnonDims   []string        // dimensions whose small cohorts must be suppressed
 	KAnonExempt map[string]bool // roles exempt from k-anonymity
 	CountMetric string          // metric used as the cohort-size measure (e.g. order_count)
+
+	// TenantBudgetBytes caps cumulative estimated scan bytes per tenant over the
+	// ledger window (0 = unlimited). Once a tenant's running total exceeds it,
+	// further queries are refused — per-tenant spend accounting, not just a
+	// per-query ceiling.
+	TenantBudgetBytes int64
 }
 
 // DefaultPolicy: admin sees raw + is exempt; managers are region-scoped (RLS);
@@ -72,6 +78,17 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	if err := authorize(eng.Model, q.Metrics, p.Role); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())
 		return nil, err
+	}
+	// 1b) Per-tenant spend budget — refuse once the tenant's cumulative cost
+	// over the ledger window has exceeded its allowance.
+	var ledger *SpendLedger
+	if pol.TenantBudgetBytes > 0 {
+		ledger = NewSpendLedger(eng.WH)
+		if spent, _, lerr := ledger.Spent(ctx, tenantKey(p)); lerr == nil && spent >= pol.TenantBudgetBytes {
+			err := fmt.Errorf("tenant %q over budget: %d of %d bytes spent — refused", tenantKey(p), spent, pol.TenantBudgetBytes)
+			audit(ctx, eng, p, q, "", true, err.Error())
+			return nil, err
+		}
 	}
 	// 2) Row-level security — append filters bound to the caller's attributes.
 	if err := applyRLS(&q, p, pol); err != nil {
@@ -115,6 +132,11 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	tr.Add("execute", ans.ExecMs, map[string]any{"rows": len(ans.Rows)})
 	_ = tr.Finish(ctx, eng.WH, time.Now().UnixNano())
 	ans.TraceID = tr.ID
+
+	// Record this query's cost against the tenant's running budget.
+	if ledger != nil {
+		_ = ledger.Add(ctx, tenantKey(p), ans.EstBytes)
+	}
 
 	return ans, nil
 }

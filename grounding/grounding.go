@@ -30,9 +30,10 @@ type Grounder struct {
 	llm   *llm.Service // nil → deterministic keyword fallback
 	topK  int
 
-	emb   domain.EmbedderProvider // nil → lexical-only retrieval
-	mvecs map[string][]float64    // metric name → unit embedding (dense index)
-	bank  *ExemplarBank           // few-shot exemplar bank (nil → no exemplars)
+	emb      domain.EmbedderProvider // nil → lexical-only retrieval
+	mvecs    map[string][]float64    // metric name → unit embedding (dense index)
+	bank     *ExemplarBank           // few-shot exemplar bank (nil → no exemplars)
+	reranker Reranker                // cross-encoder rerank stage (nil → none)
 }
 
 // Clarify is returned instead of a query when the question is ambiguous.
@@ -56,7 +57,7 @@ func New(ctx context.Context, model *semantic.Model, dbPath string) (*Grounder, 
 	if err != nil {
 		return nil, err
 	}
-	g := &Grounder{model: model, cdb: db, topK: 8}
+	g := &Grounder{model: model, cdb: db, topK: 8, reranker: DefaultReranker()}
 	if svc, err := llm.NewOpenAIFromEnv(); err == nil {
 		g.llm = svc
 	}
@@ -82,6 +83,9 @@ func (g *Grounder) Mode() string {
 	retr := "bm25"
 	if g.emb != nil {
 		retr = "hybrid(bm25+embedding)"
+	}
+	if g.reranker != nil {
+		retr += "+rerank"
 	}
 	gen := "keyword"
 	if g.llm != nil {
@@ -179,6 +183,12 @@ func (g *Grounder) Retrieve(ctx context.Context, question string) ([]ScoredMetri
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if len(out) > g.topK {
 		out = out[:g.topK]
+	}
+	// Cross-encoder rerank: re-score the top candidates jointly with the
+	// question (name/synonym coverage + description overlap) so an exact match
+	// outranks a merely topically-near neighbor — the precision@1 stage.
+	if g.reranker != nil {
+		out = g.reranker.Rerank(question, g.model, out)
 	}
 	return out, nil
 }
