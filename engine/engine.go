@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/liliang-cn/dataintelligence/obs"
@@ -29,10 +30,20 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	wh, err := warehouse.OpenPostgres(ctx, dsn, warehouse.Options{
+	opts := warehouse.Options{
 		AppRole:      os.Getenv("DI_DB_APP_ROLE"),
 		MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES"), // 0 = disabled
-	})
+	}
+	// A "duckdb:" DSN selects the DuckDB backend + dialect (opt-in build:
+	// -tags duckdb; otherwise OpenDuckDB returns a clear "rebuild" error).
+	if path, ok := duckDBPath(dsn); ok {
+		wh, err := warehouse.OpenDuckDB(ctx, path, opts)
+		if err != nil {
+			return nil, err
+		}
+		return &Engine{Model: m, WH: wh, Dialect: semantic.DuckDB{}}, nil
+	}
+	wh, err := warehouse.OpenPostgres(ctx, dsn, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +51,20 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 }
 
 func (e *Engine) Close() error { return e.WH.Close() }
+
+// duckDBPath recognizes a "duckdb:" DSN and returns the file path (":memory:"
+// when empty). e.g. "duckdb:/data/wh.duckdb" or "duckdb::memory:".
+func duckDBPath(dsn string) (string, bool) {
+	const p = "duckdb:"
+	if !strings.HasPrefix(dsn, p) {
+		return "", false
+	}
+	path := strings.TrimPrefix(dsn, p)
+	if path == "" {
+		path = ":memory:"
+	}
+	return path, true
+}
 
 // envBytes reads a byte budget from the environment (plain integer bytes),
 // returning 0 (disabled) when unset or unparseable.

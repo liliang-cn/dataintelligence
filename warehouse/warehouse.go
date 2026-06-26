@@ -21,8 +21,9 @@ type Options struct {
 }
 
 type Warehouse struct {
-	db   *sql.DB
-	opts Options
+	db     *sql.DB
+	opts   Options
+	driver string // "pgx" (Postgres) | "duckdb"
 }
 
 type Result struct {
@@ -49,7 +50,7 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Warehouse, er
 	if opts.MaxRows <= 0 {
 		opts.MaxRows = 10000
 	}
-	return &Warehouse{db: db, opts: opts}, nil
+	return &Warehouse{db: db, opts: opts, driver: "pgx"}, nil
 }
 
 func (w *Warehouse) Close() error { return w.db.Close() }
@@ -61,6 +62,9 @@ func (w *Warehouse) MaxScanBytes() int64 { return w.opts.MaxScanBytes }
 // size of a query: rows × per-row width. It runs nothing against the data, so
 // it is safe to call as a pre-flight cost check.
 func (w *Warehouse) Estimate(ctx context.Context, query string, args ...any) (rows int64, bytes int64, err error) {
+	if w.driver == "duckdb" {
+		return 0, 0, nil // DuckDB's EXPLAIN format differs; skip the byte-ceiling pre-flight
+	}
 	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
 	defer cancel()
 	var js []byte
