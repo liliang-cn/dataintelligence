@@ -190,6 +190,8 @@ github.com/liliang-cn/semantic-go v0.1.1 h1:i/C18Igh13t/05Yivu/LOkgVW2bqY1mBhIAC
 github.com/liliang-cn/semantic-go v0.1.1/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
 github.com/liliang-cn/semantic-go v0.1.2 h1:7EUHdHMMZpnh34rkv6j1P98PaHn/1ElIV6vWwcYTvi0=
 github.com/liliang-cn/semantic-go v0.1.2/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
+github.com/liliang-cn/semantic-go v0.1.3 h1:bD0kAIm7Lp6rPlVHXK9n+NzBlBws8PWb6LnC2dxcoUE=
+github.com/liliang-cn/semantic-go v0.1.3/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
 github.com/liliang-cn/skills-go v1.7.0 h1:l3VqaypdDkUS/AoU+uIysTljFaWHYp730OGuYxIlET8=
 github.com/liliang-cn/skills-go v1.7.0/go.mod h1:9uDod4rl/qZmh2vu6jcmbMMf0bjms7QNpBePg3zXxUo=
 github.com/mark3labs/mcp-go v0.32.0 h1:fgwmbfL2gbd67obg57OfV2Dnrhs1HtSdlY/i5fn7MU8=

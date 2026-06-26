@@ -110,7 +110,7 @@ A metric carries its grain and aggregation so totals never double count.
 
 ## Module 5. The Join Graph
 
-> **Status:** 🟡 Core done — aggregate-then-join + refusal; bridge (m:n) & role-playing dims not built. · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
+> **Status:** ✅ Built — aggregate-then-join + fail-to-compile on a missing edge, **plus bridge (m:n) tables & role-playing dimensions** via entity aliasing in the compiler (`FROM "orders" AS "order"`): the same physical table can play multiple roles (e.g. sale_store vs ship_store keyed on different FKs) and an m:n relationship is a bridge entity with two many-to-one edges sliceable from either side — a cross-side slice with no safe path is still refused (no fan-out). Verified by tests + live Postgres execution of the aliased SQL. (semantic-go v0.1.3.) · [→ DESIGN §16](DESIGN.md#16-status--remaining-work-honest-vs-this-designs-full-depth)
 
 Killing hallucinated joins by encoding relationships once.
 
