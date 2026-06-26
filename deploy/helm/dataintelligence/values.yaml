@@ -1,0 +1,50 @@
+replicaCount: 1
+
+image:
+  repository: dataintelligence
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Warehouse connection. The DSN is held in a Secret and injected as ${DI_DSN},
+# which the config references — so the credential never lands in a ConfigMap.
+warehouse:
+  dsn: "postgres://user:pass@warehouse:5432/db?sslmode=disable"
+
+# Rendered into a ConfigMap as /app/config.yaml. Point `model` at your model
+# (bundle it in a custom image or mount it). Set auth.oidc to require tokens.
+config:
+  model: models/meridian.yaml
+  sources: examples/meridian/sources.yaml
+  warehouse:
+    app_role: ""
+    max_scan_bytes: 0
+  governance:
+    tenant_budget_bytes: 0
+  server:
+    rest_addr: ":41900"
+    mcp_addr: ":41910"
+    otel: false
+  auth:
+    # oidc:
+    #   issuer: "https://idp.example.com"
+    #   audience: "warehouse"
+    #   jwks_url: "https://idp.example.com/.well-known/jwks.json"
+    oidc: null
+
+service:
+  type: ClusterIP
+  restPort: 41900
+  mcpPort: 41910
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

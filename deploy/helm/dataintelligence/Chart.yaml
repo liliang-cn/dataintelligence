@@ -1,0 +1,7 @@
+apiVersion: v2
+name: dataintelligence
+description: Agent-ready governed semantic layer + MCP gateway for your warehouse
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/liliang-cn/dataintelligence

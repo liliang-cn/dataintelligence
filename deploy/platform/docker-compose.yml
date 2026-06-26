@@ -1,0 +1,45 @@
+# One-command DataIntelligence stack: a seeded Meridian warehouse + the service
+# (REST /v1 + MCP). For evaluating the platform end to end.
+#
+#   cd deploy/platform && docker compose up --build
+#   REST: http://localhost:41900/v1/healthz   ·   MCP: http://localhost:41910
+#
+# Real deployments point `DI_DSN` at their own warehouse and mount a config.yaml.
+services:
+  warehouse:
+    image: postgres:16
+    container_name: di-warehouse
+    environment:
+      POSTGRES_USER: meridian
+      POSTGRES_PASSWORD: meridian
+      POSTGRES_DB: meridian
+    volumes:
+      - ../schema:/docker-entrypoint-initdb.d:ro   # 01_schema + 02_seed + 03_obo_rls auto-applied
+      - di-warehouse-data:/var/lib/postgresql/data
+    ports:
+      - "39632:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meridian -d meridian"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  service:
+    build:
+      context: ../..          # repo root (module dir)
+      dockerfile: Dockerfile
+    image: dataintelligence:latest
+    container_name: di-service
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    environment:
+      DI_DSN: "postgres://meridian:meridian@warehouse:5432/meridian?sslmode=disable"
+      DI_OTEL: ""             # set to 1 to emit OpenTelemetry spans
+      # DI_OIDC_* / a mounted config.yaml enable auth in production
+    ports:
+      - "41900:41900"        # REST /v1
+      - "41910:41910"        # MCP (streamable HTTP)
+
+volumes:
+  di-warehouse-data:

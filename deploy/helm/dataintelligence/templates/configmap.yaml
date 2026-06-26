@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dataintelligence.fullname" . }}
+  labels:
+    {{- include "dataintelligence.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model: {{ .Values.config.model }}
+    sources: {{ .Values.config.sources }}
+    warehouse:
+      dsn: "${DI_DSN}"
+      app_role: {{ .Values.config.warehouse.app_role | quote }}
+      max_scan_bytes: {{ .Values.config.warehouse.max_scan_bytes }}
+    governance:
+      tenant_budget_bytes: {{ .Values.config.governance.tenant_budget_bytes }}
+    server:
+      rest_addr: {{ .Values.config.server.rest_addr | quote }}
+      mcp_addr: {{ .Values.config.server.mcp_addr | quote }}
+      otel: {{ .Values.config.server.otel }}
+    {{- with .Values.config.auth.oidc }}
+    auth:
+      oidc:
+        issuer: {{ .issuer | quote }}
+        audience: {{ .audience | quote }}
+        jwks_url: {{ .jwks_url | quote }}
+    {{- end }}

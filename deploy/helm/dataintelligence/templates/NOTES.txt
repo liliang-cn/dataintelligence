@@ -1,0 +1,15 @@
+DataIntelligence is deployed.
+
+REST /v1 and MCP are on the {{ include "dataintelligence.fullname" . }} service
+(ports {{ .Values.service.restPort }} / {{ .Values.service.mcpPort }}).
+
+Port-forward and check readiness:
+
+  kubectl port-forward svc/{{ include "dataintelligence.fullname" . }} {{ .Values.service.restPort }}:{{ .Values.service.restPort }}
+  curl localhost:{{ .Values.service.restPort }}/v1/readyz
+
+{{- if not .Values.config.auth.oidc }}
+
+WARNING: auth.oidc is not set — the service runs OPEN (no token required).
+Set .Values.config.auth.oidc before exposing it beyond a trusted network.
+{{- end }}
