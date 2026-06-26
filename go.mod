@@ -6,7 +6,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/liliang-cn/agent-go/v2 v2.92.0
-	github.com/liliang-cn/cortexdb/v2 v2.35.0
+	github.com/liliang-cn/cortexdb/v2 v2.37.0
 	github.com/liliang-cn/eval-go v0.1.0
 	github.com/liliang-cn/semantic-go v0.1.3
 	github.com/minio/minio-go/v7 v7.2.0
