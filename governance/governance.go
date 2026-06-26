@@ -10,6 +10,7 @@ import (
 	"time"
 
 	semantic "github.com/liliang-cn/semantic-go"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/obs"
@@ -59,6 +60,14 @@ func DefaultPolicy() Policy {
 // Query authorizes, applies RLS + k-anonymity, runs, masks, and audits.
 func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principal, pol Policy) (*engine.Answer, error) {
 	startNs := time.Now().UnixNano()
+	// Root OTel span: child compile/plan/execute spans nest under it via ctx, and
+	// if a traceparent was propagated in (MCP HTTP boundary) this continues that
+	// remote trace. No-op until OTel is initialized.
+	ctx, span := obs.Tracer().Start(ctx, "governed_query")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("role", p.Role),
+		attribute.StringSlice("metrics", q.Metrics))
 	// 1) Metric RBAC — refuse before any SQL runs.
 	if err := authorize(eng.Model, q.Metrics, p.Role); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())

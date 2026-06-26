@@ -9,8 +9,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 	semantic "github.com/liliang-cn/semantic-go"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Engine struct {
@@ -79,7 +81,9 @@ func (e *Engine) QueryAs(ctx context.Context, q semantic.Query, sess warehouse.S
 
 func (e *Engine) run(ctx context.Context, q semantic.Query, sess *warehouse.Session) (*Answer, error) {
 	t0 := time.Now()
+	_, cspan := obs.Tracer().Start(ctx, "compile")
 	compiled, err := semantic.Compile(e.Model, q, e.Dialect)
+	cspan.End()
 	if err != nil {
 		return nil, fmt.Errorf("compile: %w", err)
 	}
@@ -87,16 +91,21 @@ func (e *Engine) run(ctx context.Context, q semantic.Query, sess *warehouse.Sess
 	// Pre-execution cost estimate (one EXPLAIN): used both as the byte-ceiling
 	// guardrail and as a cost signal recorded on the trace. Best-effort — if the
 	// planner can't estimate, fall back to executing without a ceiling.
-	estRows, estBytes, estErr := e.WH.Estimate(ctx, compiled.SQL, compiled.Args...)
+	pctx, pspan := obs.Tracer().Start(ctx, "plan")
+	estRows, estBytes, estErr := e.WH.Estimate(pctx, compiled.SQL, compiled.Args...)
+	pspan.SetAttributes(attribute.Int64("est_rows", estRows), attribute.Int64("est_bytes", estBytes))
+	pspan.End()
 	if estErr == nil && e.WH.MaxScanBytes() > 0 && estBytes > e.WH.MaxScanBytes() {
 		return nil, fmt.Errorf("query refused: estimated %d bytes (%d rows) exceeds the %d-byte ceiling — add a filter or narrow the grain", estBytes, estRows, e.WH.MaxScanBytes())
 	}
+	ectx, espan := obs.Tracer().Start(ctx, "execute")
 	var res *warehouse.Result
 	if sess != nil {
-		res, err = e.WH.QueryAs(ctx, *sess, compiled.SQL, compiled.Args...)
+		res, err = e.WH.QueryAs(ectx, *sess, compiled.SQL, compiled.Args...)
 	} else {
-		res, err = e.WH.Query(ctx, compiled.SQL, compiled.Args...)
+		res, err = e.WH.Query(ectx, compiled.SQL, compiled.Args...)
 	}
+	espan.End()
 	if err != nil {
 		return nil, err
 	}

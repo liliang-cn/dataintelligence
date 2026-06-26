@@ -24,6 +24,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	agentpkg "github.com/liliang-cn/agent-go/v2/pkg/agent"
 	"github.com/liliang-cn/agent-go/v2/pkg/domain"
@@ -40,6 +41,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/grounding"
 	"github.com/liliang-cn/dataintelligence/ingest"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
+	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/nleval"
 	"github.com/liliang-cn/dataintelligence/nodes"
 	"github.com/liliang-cn/dataintelligence/rollout"
@@ -55,7 +57,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: di <query> [flags]")
 		os.Exit(2)
 	}
+	// Real OpenTelemetry, opt-in via DI_OTEL=1 (spans are no-ops otherwise).
+	if os.Getenv("DI_OTEL") != "" {
+		if _, err := obs.InitOTel("dataintelligence"); err != nil {
+			fail(err)
+		}
+	}
 	switch os.Args[1] {
+	case "trace":
+		runTrace(os.Args[2:])
 	case "query":
 		runQuery(os.Args[2:])
 	case "ask":
@@ -174,6 +184,50 @@ func runModel(argv []string) {
 	if errs > 0 {
 		os.Exit(1)
 	}
+}
+
+// runTrace demonstrates real OpenTelemetry with W3C trace-context propagation
+// (M20): a client span injects a traceparent into a carrier; the "server" side
+// extracts it and runs a governed query whose compile/plan/execute spans nest
+// under the SAME trace_id — the cross-process linkage, proven end to end.
+func runTrace(argv []string) {
+	fs := flag.NewFlagSet("trace", flag.ExitOnError)
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	metrics := fs.String("metrics", "total_revenue", "metrics to query")
+	by := fs.String("by", "store_region", "group-by dimensions")
+	role := fs.String("role", "finance", "caller role")
+	_ = fs.Parse(argv)
+
+	if _, err := obs.InitOTel("dataintelligence"); err != nil {
+		fail(err)
+	}
+	ctx := context.Background()
+
+	// --- client side: start a span and inject its traceparent into a carrier ---
+	cctx, client := obs.Tracer().Start(ctx, "client_request")
+	carrier := map[string]string{}
+	obs.InjectMap(cctx, carrier)
+	clientTrace := oteltrace.SpanContextFromContext(cctx).TraceID().String()
+	fmt.Printf("client span trace_id = %s\n", clientTrace)
+	fmt.Printf("propagated traceparent = %s\n", carrier["traceparent"])
+	client.End()
+
+	// --- server side: extract the remote context, then run a real query ---
+	sctx := obs.ExtractMap(context.Background(), carrier)
+	serverTrace := oteltrace.SpanContextFromContext(sctx).TraceID().String()
+	fmt.Printf("server extracted trace_id = %s  (match=%v)\n", serverTrace, serverTrace == clientTrace)
+
+	eng, err := engine.New(sctx, "models/meridian.yaml", *dsn)
+	if err != nil {
+		fail(err)
+	}
+	defer eng.Close()
+	_, err = governance.Query(sctx, eng, semantic.Query{Metrics: split(*metrics), GroupBy: split(*by)},
+		governance.Principal{User: "cli", Role: *role}, governance.DefaultPolicy())
+	if err != nil {
+		fail(err)
+	}
+	fmt.Fprintln(os.Stderr, "-- the otel spans above (governed_query→compile/plan/execute) share the client's trace_id")
 }
 
 // runPentest is the automated MCP-security regression (M17, lesson 75): it
@@ -988,8 +1042,13 @@ func runMCP(argv []string) {
 			func(*http.Request) *mcpsdk.Server { return mcpserver.NewServer(eng, opts) }, nil)
 		authed := auth.RequireBearerToken(verifier,
 			&auth.RequireBearerTokenOptions{Scopes: []string{"metrics:read"}})(handler)
+		// Continue any trace the client carried in (W3C traceparent header), so
+		// server-side query spans nest under the caller's distributed trace.
+		traced := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authed.ServeHTTP(w, r.WithContext(obs.ExtractHTTP(r.Context(), r.Header)))
+		})
 		fmt.Fprintf(os.Stderr, "dataintelligence MCP server on http %s (%s)\n", *httpAddr, note)
-		if err := http.ListenAndServe(*httpAddr, authed); err != nil {
+		if err := http.ListenAndServe(*httpAddr, traced); err != nil {
 			fail(err)
 		}
 		return
