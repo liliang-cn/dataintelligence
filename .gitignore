@@ -7,3 +7,7 @@ testdata/oidc/
 deploy/crm/.env
 deploy/crm/twenty-compose.upstream.yml
 deploy/crm/twenty.env.upstream
+
+# local tooling artifacts
+.playwright-mcp/
+di-query-finance.png

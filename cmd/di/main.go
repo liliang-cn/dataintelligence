@@ -53,6 +53,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/reconcile"
 	"github.com/liliang-cn/dataintelligence/nodes"
 	"github.com/liliang-cn/dataintelligence/rollout"
+	"github.com/liliang-cn/dataintelligence/spiderbench"
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/runtime/ui"
 	"github.com/liliang-cn/dataintelligence/warehouse"
@@ -123,6 +124,7 @@ func rootCmd() *cobra.Command {
 		leaf("exemplar", "model", "Manage the few-shot exemplar bank", runExemplar),
 		leaf("eval", "model", "Reconciliation gate (metrics vs control SQL)", runEval),
 		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
+		leaf("bench", "model", "Public benchmark (Spider): coverage + correctness", runBench),
 		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
 		leaf("rollout", "model", "Version registry, canary, auto-rollback", runRollout),
 		// governance & security
@@ -352,6 +354,37 @@ func runExplain(argv []string) {
 // runModel is the metadata gate (M4): `di model lint` enforces that every
 // metric describes itself and declares how it rolls up. Exits 1 on any error so
 // it can guard a merge in CI. The rules live in the neutral core (semantic.Lint).
+// runBench dispatches the public-benchmark harness. Spider is the first backend;
+// it reports coverage (how many questions are expressible as a semantic query)
+// alongside correctness on that slice — never a single misleading leaderboard number.
+func runBench(argv []string) {
+	if len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: di bench spider [-data DIR]")
+		os.Exit(2)
+	}
+	switch argv[0] {
+	case "spider":
+		runBenchSpider(argv[1:])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: di bench spider [-data DIR]")
+		os.Exit(2)
+	}
+}
+
+// runBenchSpider is M1: classify the Spider dev set by expressibility and print
+// coverage. Needs only dev.json — no warehouse, no LLM.
+func runBenchSpider(argv []string) {
+	fs := flag.NewFlagSet("bench spider", flag.ExitOnError)
+	dir := fs.String("data", envOr("DI_SPIDER_DIR", "testdata/spider"), "Spider data dir (holds dev.json)")
+	_ = fs.Parse(argv)
+
+	xs, err := spiderbench.LoadDev(*dir)
+	if err != nil {
+		fail(err)
+	}
+	spiderbench.Cover(xs).Print(os.Stdout)
+}
+
 func runModel(argv []string) {
 	if len(argv) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: di model <lint|gen> [flags]")
