@@ -1,5 +1,10 @@
 # DataIntelligence
 
+[![CI](https://github.com/liliang-cn/dataintelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/liliang-cn/dataintelligence/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/liliang-cn/dataintelligence.svg)](https://pkg.go.dev/github.com/liliang-cn/dataintelligence)
+[![Go Report Card](https://goreportcard.com/badge/github.com/liliang-cn/dataintelligence)](https://goreportcard.com/report/github.com/liliang-cn/dataintelligence)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **A governed semantic layer + MCP gateway that makes your data warehouse safe for AI agents.**
 
 Point an LLM agent at a raw warehouse and it will, sooner or later, invent a join,
