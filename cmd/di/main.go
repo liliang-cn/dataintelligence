@@ -35,6 +35,7 @@ import (
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/spf13/cobra"
 
+	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/convo"
 	"github.com/liliang-cn/dataintelligence/copilot"
@@ -44,18 +45,17 @@ import (
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
-	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/ingest"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
 	"github.com/liliang-cn/dataintelligence/modelgen"
-	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/nleval"
-	"github.com/liliang-cn/dataintelligence/reconcile"
 	"github.com/liliang-cn/dataintelligence/nodes"
+	"github.com/liliang-cn/dataintelligence/obs"
+	"github.com/liliang-cn/dataintelligence/reconcile"
 	"github.com/liliang-cn/dataintelligence/rollout"
-	"github.com/liliang-cn/dataintelligence/spiderbench"
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/runtime/ui"
+	"github.com/liliang-cn/dataintelligence/spiderbench"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 	"github.com/liliang-cn/dataintelligence/writeback"
 )
@@ -182,7 +182,7 @@ func runServe(argv []string) {
 	} else {
 		cfg = &config.Config{
 			Model: *model, Sources: envOr("DI_SOURCES", "examples/meridian/sources.yaml"),
-			Warehouse: config.Warehouse{DSN: *dsn, AppRole: os.Getenv("DI_DB_APP_ROLE"), MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES")},
+			Warehouse:  config.Warehouse{DSN: *dsn, AppRole: os.Getenv("DI_DB_APP_ROLE"), MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES")},
 			Governance: config.Governance{TenantBudgetBytes: envBytes("DI_TENANT_BUDGET_BYTES")},
 			Server:     config.Server{RESTAddr: envOr("DI_ADDR", ":41900"), MCPAddr: envOr("DI_MCP_ADDR", ":41910"), OTel: os.Getenv("DI_OTEL") != ""},
 		}
@@ -1530,10 +1530,24 @@ func runMCP(argv []string) {
 	}
 	defer eng.Close()
 
+	// NL grounding engine for the `ground` tool — the same engine the REST
+	// /v1/ground endpoint uses (retrieval reused, not reimplemented).
+	idxDir, _ := os.MkdirTemp("", "di-mcp-")
+	defer os.RemoveAll(idxDir)
+	gr, gerr := grounding.New(ctx, eng.Model, filepath.Join(idxDir, "idx.db"))
+	if gerr != nil {
+		fail(gerr)
+	}
+	defer gr.Close()
+	if bank, berr := grounding.LoadExemplars(ctx, "models/exemplars.yaml"); berr == nil {
+		gr.WithExemplars(bank)
+	}
+
 	opts := &mcpserver.Options{
-		Default:    mcpserver.Principal{User: "local", Role: *role, Scopes: []string{"metrics:read", "data:write"}},
-		RPS:        *rps, Burst: 5,
+		Default: mcpserver.Principal{User: "local", Role: *role, Scopes: []string{"metrics:read", "data:write"}},
+		RPS:     *rps, Burst: 5,
 		ChecksPath: envOr("DI_CHECKS", "examples/meridian/conflicts.yaml"),
+		Grounder:   gr,
 	}
 
 	if *httpAddr != "" {
@@ -1556,7 +1570,7 @@ func runMCP(argv []string) {
 	}
 
 	srv := mcpserver.NewServer(eng, opts)
-	fmt.Fprintln(os.Stderr, "dataintelligence MCP server on stdio (tools: list_metrics, get_dimensions, query_metric, ingest_csv)")
+	fmt.Fprintln(os.Stderr, "dataintelligence MCP server on stdio (tools: list_metrics, get_dimensions, query_metric, ground, ingest_csv, describe_warehouse, health_check)")
 	if err := srv.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
 		fail(err)
 	}

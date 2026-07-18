@@ -177,13 +177,8 @@ func (b *ExemplarBank) Promote(ctx context.Context, q string, query semantic.Que
 }
 
 func tokenSet(s string) map[string]bool {
-	out := map[string]bool{}
-	for _, w := range wordRe.FindAllString(strings.ToLower(s), -1) {
-		if !stop[w] && len(w) > 1 {
-			out[w] = true
-		}
-	}
-	return out
+	// CJK-aware: ASCII words + CJK character bigrams (see tokensOf).
+	return tokensOf(s)
 }
 
 func overlap(a, b map[string]bool) float64 {

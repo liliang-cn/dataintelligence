@@ -200,8 +200,8 @@ github.com/liliang-cn/mcp-swagger-server v0.4.0 h1:vgcUvQp+ped++O1+hQz29oWtXiHE+
 github.com/liliang-cn/mcp-swagger-server v0.4.0/go.mod h1:/ulyr2I9rj9LFAY4mdT875hewZGYgMi08uNKBa203Ew=
 github.com/liliang-cn/pipeit v0.1.0 h1:ZU5hkL5SXr6vHtn/gcJBX9i55l0HM4rVsYTfxqn5M34=
 github.com/liliang-cn/pipeit v0.1.0/go.mod h1:ghxqa1CKTztR5me4vl8srIYQhfv89tc37SnocoXv4/E=
-github.com/liliang-cn/semantic-go v0.1.4 h1:4V9lE+qalDJXANFyWs6hUav5m5SQqUFI7N8F3rLtlUs=
-github.com/liliang-cn/semantic-go v0.1.4/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
+github.com/liliang-cn/semantic-go v0.1.5 h1:itczUVZGNBq08siZNU6noGbi9m+P4+ncewbEXk7tqyk=
+github.com/liliang-cn/semantic-go v0.1.5/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
 github.com/liliang-cn/skills-go v1.7.0 h1:l3VqaypdDkUS/AoU+uIysTljFaWHYp730OGuYxIlET8=
 github.com/liliang-cn/skills-go v1.7.0/go.mod h1:9uDod4rl/qZmh2vu6jcmbMMf0bjms7QNpBePg3zXxUo=
 github.com/marcboeker/go-duckdb v1.8.5 h1:tkYp+TANippy0DaIOP5OEfBEwbUINqiFqgwMQ44jME0=

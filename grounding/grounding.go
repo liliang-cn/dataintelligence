@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/liliang-cn/agent-go/v2/pkg/domain"
 	"github.com/liliang-cn/agent-go/v2/pkg/llm"
@@ -165,14 +166,27 @@ func (g *Grounder) Retrieve(ctx context.Context, question string) ([]ScoredMetri
 	// Fuse: min-max normalize each signal, then weighted sum. Dense leads when
 	// available (semantics > keywords); BM25-only when there's no embedder.
 	lexN, denseN := minmax(lex), minmax(dense)
+	memLex := g.memLexical(question) // CJK/ASCII-aware, in-memory; independent of the FTS tokenizer
 	const wLex, wDense = 0.4, 0.6
 	combined := map[string]float64{}
 	for i := range g.model.Metrics {
 		name := g.model.Metrics[i].Name
 		if g.emb != nil {
-			combined[name] = wLex*lexN[name] + wDense*denseN[name]
-		} else if _, ok := lex[name]; ok {
-			combined[name] = lexN[name]
+			s := wLex*lexN[name] + wDense*denseN[name]
+			if memLex[name] > s { // an exact lexical (incl. CJK) match floors the score
+				s = memLex[name]
+			}
+			combined[name] = s
+		} else {
+			// BM25-only (offline): fuse cortexdb lexical with the in-memory CJK-aware
+			// signal, so Chinese questions retrieve even when the FTS index drops CJK.
+			s := lexN[name]
+			if memLex[name] > s {
+				s = memLex[name]
+			}
+			if s > 0 {
+				combined[name] = s
+			}
 		}
 	}
 
@@ -442,8 +456,12 @@ func (g *Grounder) keyword(question string, retrieved []ScoredMetric) (semantic.
 	var groupBy []string
 	for i := range g.model.Dimensions {
 		d := &g.model.Dimensions[i]
-		if hasPhrase(q, normalize(d.Name)) || hasPhrase(q, normalize(d.Column)) {
-			groupBy = append(groupBy, d.Name)
+		labels := append([]string{d.Name, d.Column}, d.Synonyms...)
+		for _, lab := range labels {
+			if phraseHit(q, normalize(lab)) {
+				groupBy = append(groupBy, d.Name)
+				break
+			}
 		}
 	}
 	if len(metrics) == 0 {
@@ -507,15 +525,99 @@ var stop = map[string]bool{"the": true, "a": true, "an": true, "of": true, "for"
 	"by": true, "in": true, "to": true, "and": true, "what": true, "is": true, "are": true,
 	"how": true, "many": true, "show": true, "me": true, "per": true, "each": true}
 
-func ftsQuery(q string) string {
-	var words []string
-	for _, w := range wordRe.FindAllString(strings.ToLower(q), -1) {
-		if !stop[w] && len(w) > 1 {
-			words = append(words, w)
+func isCJK(r rune) bool {
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hangul, r) ||
+		unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r)
+}
+
+func hasCJKText(s string) bool {
+	for _, r := range s {
+		if isCJK(r) {
+			return true
 		}
 	}
-	if len(words) == 0 {
+	return false
+}
+
+// phraseHit reports whether phrase occurs in q. ASCII phrases use word-boundary
+// matching (so "region" doesn't hit "regional"); CJK phrases, which have no word
+// boundaries, use a plain substring test.
+func phraseHit(q, phrase string) bool {
+	if phrase == "" {
+		return false
+	}
+	if hasCJKText(phrase) {
+		return strings.Contains(q, phrase)
+	}
+	return hasPhrase(q, phrase)
+}
+
+// tokensOf lowercases s and returns a token set: ASCII [a-z0-9]+ runs (len>1,
+// non-stop) plus overlapping CJK character bigrams (a lone CJK char becomes a
+// unigram). This gives BM25/lexical matching for Chinese/Japanese/Korean without
+// a word segmenter — "各门店大区的营收" → 各门,门店,店大,大区,区的,的营,营收.
+func tokensOf(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range wordRe.FindAllString(strings.ToLower(s), -1) {
+		if !stop[w] && len(w) > 1 {
+			out[w] = true
+		}
+	}
+	var run []rune
+	flush := func() {
+		if len(run) == 1 {
+			out[string(run)] = true
+		}
+		for i := 0; i+1 < len(run); i++ {
+			out[string(run[i:i+2])] = true
+		}
+		run = run[:0]
+	}
+	for _, r := range s {
+		if isCJK(r) {
+			run = append(run, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// memLexical scores each metric by CJK/ASCII token overlap between the question
+// and the metric's name + synonyms + description. Pure in-memory over the (small)
+// model, so lexical retrieval works even with no embedder and regardless of the
+// FTS engine's own tokenizer.
+func (g *Grounder) memLexical(question string) map[string]float64 {
+	q := tokensOf(question)
+	out := map[string]float64{}
+	if len(q) == 0 {
+		return out
+	}
+	for i := range g.model.Metrics {
+		m := &g.model.Metrics[i]
+		d := tokensOf(m.Name + " " + strings.Join(m.Synonyms, " ") + " " + m.Description)
+		hit := 0
+		for t := range q {
+			if d[t] {
+				hit++
+			}
+		}
+		if hit > 0 {
+			out[m.Name] = float64(hit) / float64(len(q))
+		}
+	}
+	return out
+}
+
+func ftsQuery(q string) string {
+	toks := tokensOf(q)
+	if len(toks) == 0 {
 		return strings.TrimSpace(q)
+	}
+	words := make([]string, 0, len(toks))
+	for t := range toks {
+		words = append(words, t)
 	}
 	return strings.Join(words, " OR ")
 }

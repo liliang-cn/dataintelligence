@@ -48,6 +48,9 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "query_metric",
 		Description: "Run a governed semantic query: compute metrics, optionally grouped by dimensions. You name metrics/dimensions; the layer compiles safe SQL. Never write SQL yourself."},
 		s.queryMetric)
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "ground",
+		Description: "Resolve a natural-language question into a typed semantic query (metrics, group_by, filters, grain) WITHOUT executing it. Use to see how a question maps to the model, then pass the result to query_metric."},
+		s.ground)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "ingest_csv",
 		Description: "Ingest a CSV into a warehouse table: infer mapping, run key/data checks, land rows."},
 		s.ingestCSV)
@@ -130,6 +133,51 @@ func (s *srv) queryMetric(ctx context.Context, req *mcpsdk.CallToolRequest, in q
 	}
 	out := map[string]any{"columns": ans.Columns, "rows": ans.Rows, "sql": ans.SQL}
 	return textResult(renderTable(ans.Columns, ans.Rows)), out, nil
+}
+
+type groundIn struct {
+	Question string `json:"question" jsonschema:"a natural-language analytics question to resolve into a typed semantic query"`
+}
+
+// ground resolves NL → semantic query using the same grounding engine as the
+// REST POST /v1/ground endpoint (retrieval is reused, not reimplemented). It
+// only resolves the query; it does not execute it, so no warehouse read happens.
+func (s *srv) ground(ctx context.Context, req *mcpsdk.CallToolRequest, in groundIn) (*mcpsdk.CallToolResult, any, error) {
+	if _, deny := s.guard(req, "metrics:read"); deny != nil {
+		return deny, nil, nil
+	}
+	if s.opts.Grounder == nil {
+		return errResult("ground is not configured (no grounding engine)"), nil, nil
+	}
+	if strings.TrimSpace(in.Question) == "" {
+		return errResult("question is required"), nil, nil
+	}
+	q, _, clar, err := s.opts.Grounder.Ground(ctx, in.Question)
+	if err != nil && clar == nil {
+		return errResult(err.Error()), nil, nil
+	}
+	if clar != nil {
+		out := map[string]any{"clarify": clar.Question, "candidates": clar.Candidates}
+		return textResult("clarify: " + clar.Question), out, nil
+	}
+	out := map[string]any{
+		"metrics":  q.Metrics,
+		"group_by": q.GroupBy,
+		"where":    q.Where,
+		"grain":    q.TimeGrain,
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "metrics: %s", strings.Join(q.Metrics, ", "))
+	if len(q.GroupBy) > 0 {
+		fmt.Fprintf(&b, "\ngroup_by: %s", strings.Join(q.GroupBy, ", "))
+	}
+	for _, f := range q.Where {
+		fmt.Fprintf(&b, "\nwhere: %s %s %v", f.Dimension, f.Op, f.Values)
+	}
+	if q.TimeGrain != "" {
+		fmt.Fprintf(&b, "\ngrain: %s", q.TimeGrain)
+	}
+	return textResult(b.String()), out, nil
 }
 
 type ingestIn struct {

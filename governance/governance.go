@@ -71,6 +71,16 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	// remote trace. No-op until OTel is initialized.
 	ctx, span := obs.Tracer().Start(ctx, "governed_query")
 	defer span.End()
+	// 0) Resolve metric synonyms to canonical names before anything else, so
+	// RBAC, compilation, tracing and audit all speak canonical names. A caller
+	// may name a metric by any declared synonym (e.g. 营收 → revenue).
+	if err := eng.Model.ResolveMetrics(&q); err != nil {
+		audit(ctx, eng, p, q, "", true, err.Error())
+		return nil, err
+	}
+	// Same for group-by dimension synonyms (e.g. 大区 → store_region). Unknown
+	// names are left for the compiler's dimension diagnostics.
+	eng.Model.ResolveGroupBy(&q)
 	span.SetAttributes(
 		attribute.String("role", p.Role),
 		attribute.StringSlice("metrics", q.Metrics))
