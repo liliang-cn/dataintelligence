@@ -6,8 +6,8 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/warehouse"
@@ -46,12 +46,25 @@ type Report struct {
 	Errors      []string
 }
 
-var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
-
+// normalize folds a header into a stable column name that is safe for CJK.
+// Unicode letters and digits are kept (so "门店" stays "门店"), ASCII letters are
+// lower-cased, and any run of other characters (spaces, ASCII punctuation)
+// collapses to a single underscore, with leading/trailing underscores trimmed.
 func normalize(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = nonAlnum.ReplaceAllString(s, "_")
-	return strings.Trim(s, "_")
+	var b strings.Builder
+	pendingSep := false
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if pendingSep && b.Len() > 0 {
+				b.WriteByte('_')
+			}
+			pendingSep = false
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		pendingSep = true
+	}
+	return b.String()
 }
 
 // InferMapping builds a mapping. With no targets it lands every column under a

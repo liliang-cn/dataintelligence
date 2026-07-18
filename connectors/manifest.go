@@ -68,6 +68,8 @@ func Build(spec SourceSpec) (Source, error) {
 	switch strings.ToLower(spec.Type) {
 	case "mysql":
 		return &MySQLSource{DSN: c["dsn"], Query: c["query"], Name: spec.Name}, nil
+	case "mssql", "sqlserver":
+		return &MSSQLSource{DSN: c["dsn"], Query: c["query"], Name: spec.Name}, nil
 	case "mongo", "mongodb":
 		return &MongoSource{URI: c["uri"], Database: c["database"], Collection: c["collection"], Limit: atoiDefault(c["limit"], 1000)}, nil
 	case "redis":
@@ -78,6 +80,13 @@ func Build(spec SourceSpec) (Source, error) {
 		return &KafkaSource{Brokers: c["brokers"], Topic: c["topic"], Max: atoiDefault(c["max"], 100)}, nil
 	case "csv":
 		return &CSVSource{Path: c["path"]}, nil
+	case "xlsx", "excel", "xls":
+		return &XLSXSource{
+			Path:      c["path"],
+			Sheet:     c["sheet"],
+			HeaderRow: atoiDefault(c["header_row"], 1),
+			Name:      spec.Name,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", spec.Type)
 	}

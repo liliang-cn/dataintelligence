@@ -1970,8 +1970,8 @@ func mustRead(path string) []byte {
 }
 
 // runSource is the neutral, manifest-driven multi-source connector: it reads any
-// configured source (mysql/mongo/redis/s3/kafka/csv) and can ingest it into the
-// warehouse. The platform knows source TYPES; the manifest supplies the domain.
+// configured source (mysql/mssql/mongo/redis/s3/kafka/csv/xlsx) and can ingest it into
+// the warehouse. The platform knows source TYPES; the manifest supplies the domain.
 //
 //	di source list   -manifest examples/meridian/sources.yaml
 //	di source read   -manifest ... <name>
