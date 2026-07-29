@@ -64,3 +64,14 @@ server:
 #     model: models/shop.yaml
 #     dsn: mysql://user:pass@host:3306/shop
 #     allow_raw_sql: false
+#
+# --- Runtime registration --------------------------------------------------
+# Set databases_file to let databases be registered over the API
+# (POST /v1/databases) and survive a restart — this is what a product's setup
+# wizard uses. OFF by default: an endpoint that opens a caller-supplied DSN is
+# not something to enable by accident on a networked service.
+#
+# With it set and no databases declared, DI starts with zero of them, which is
+# the honest state of a product before its user has connected anything.
+#
+# databases_file: /var/lib/di/databases.json

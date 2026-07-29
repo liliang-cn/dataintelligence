@@ -74,6 +74,8 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/ground", v.groundV1)
 	mux.HandleFunc("POST /v1/ask", v.askV1)
 	mux.HandleFunc("GET /v1/databases", v.databasesV1)
+	mux.HandleFunc("POST /v1/databases", v.databaseAddV1)
+	mux.HandleFunc("DELETE /v1/databases/{id}", v.databaseDeleteV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
@@ -316,14 +318,19 @@ func (v *V1) databasesV1(w http.ResponseWriter, r *http.Request) {
 		Governed bool   `json:"governed"`
 		RawSQL   bool   `json:"raw_sql"`
 		Default  bool   `json:"default,omitempty"`
+		Editable bool   `json:"editable"` // registered at runtime, so removable via the API
 	}
 	out := []dbi{}
 	for _, id := range v.DBs.IDs() {
 		d, _ := v.DBs.Def(id)
 		out = append(out, dbi{ID: id, Governed: d.Model != "",
-			RawSQL: v.DBs.RawSQLAllowed(id), Default: id == v.DBs.Default()})
+			RawSQL: v.DBs.RawSQLAllowed(id), Default: id == v.DBs.Default(),
+			Editable: v.DBs.IsRegistered(id)})
 	}
-	writeJSON(w, 200, map[string]any{"databases": out, "default": v.DBs.Default()})
+	writeJSON(w, 200, map[string]any{
+		"databases": out, "default": v.DBs.Default(),
+		"can_register": v.DBs.CanRegister(),
+	})
 }
 
 // tablesV1 lists a database's tables on any supported engine.
@@ -471,4 +478,55 @@ func (v *V1) branchEngine(w http.ResponseWriter, r *http.Request) (*engine.Engin
 	}
 	eng, _, ok := v.resolve(w, r)
 	return eng, ok
+}
+
+// databaseAddV1 registers a database at runtime — a product's setup wizard,
+// where someone types connection details and expects to be querying a minute
+// later rather than editing YAML and restarting a service.
+//
+// It is off unless the config sets databases_file. An endpoint that opens a
+// connection string the caller supplies is not something to have on by accident
+// on a networked service, and "off by default, with the error saying how to
+// turn it on" is the only version of that choice a user can act on.
+func (v *V1) databaseAddV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	if !v.DBs.CanRegister() {
+		writeErr(w, 403, errString(
+			"runtime database registration is disabled — set databases_file in the config to enable it"))
+		return
+	}
+	var body struct {
+		ID          string `json:"id"`
+		DSN         string `json:"dsn"`
+		Model       string `json:"model"`
+		AllowRawSQL bool   `json:"allow_raw_sql"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	def := engine.Def{ID: body.ID, DSN: body.DSN, Model: body.Model, AllowRawSQL: body.AllowRawSQL}
+	if err := v.DBs.Register(r.Context(), def); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "id": def.ID, "governed": def.Model != "",
+		"raw_sql": v.DBs.RawSQLAllowed(def.ID),
+	})
+}
+
+func (v *V1) databaseDeleteV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	if err := v.DBs.Unregister(r.PathValue("id")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "removed": r.PathValue("id")})
 }

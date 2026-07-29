@@ -237,14 +237,21 @@ func runServe(argv []string) {
 		idx = dir
 	}
 	dbs := engine.NewDatabases(reg, idx, "models/exemplars.yaml")
+	if cfg.DatabasesFile != "" {
+		if dbs, err = dbs.WithStore(engine.NewStore(cfg.DatabasesFile)); err != nil {
+			fail(err)
+		}
+	}
 	defer dbs.Close()
 
 	// Open the default database now so a bad DSN or missing model fails at boot
 	// rather than on the first question. The rest stay closed until asked for:
 	// one unreachable warehouse should not keep the other twelve offline.
-	eng, err := reg.Get(ctx, reg.Default())
-	if err != nil {
-		fail(err)
+	var eng *engine.Engine
+	if reg.Default() != "" {
+		if eng, err = reg.Get(ctx, reg.Default()); err != nil {
+			fail(err)
+		}
 	}
 
 	pol := governance.DefaultPolicy()
@@ -253,20 +260,28 @@ func runServe(argv []string) {
 
 	// Workflows and the operator console run against the default database.
 	// They are engineer-facing surfaces with one connection each; making them
-	// multi-database is a console change, not a wiring one.
-	fe, _ := newFlowEngine(ctx, cfg.Defs()[0].DSN)
+	// multi-database is a console change, not a wiring one. With no database
+	// configured yet they are simply not mounted — the /v1 API is still up, so
+	// a product can register the first one.
+	var fe *flow.Engine
+	if defs := cfg.Defs(); len(defs) > 0 {
+		fe, _ = newFlowEngine(ctx, defs[0].DSN)
+	}
 
 	// One parent mux: stable /v1 data-plane API + the existing control-plane API
 	// + the embedded web console at /ui.
 	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
-	if console, uerr := ui.New(eng, pol, fe); uerr == nil {
+	if eng == nil {
+		fmt.Fprintf(os.Stderr, "-- no database configured yet; the console and control-plane API are not mounted (register one: POST /v1/databases)\n")
+	} else if console, uerr := ui.New(eng, pol, fe); uerr == nil {
 		console.Mount(mux)
+		mux.Handle("/", runtime.NewServer(eng, fe))
 	} else {
 		fmt.Fprintf(os.Stderr, "-- web console disabled: %v\n", uerr)
+		mux.Handle("/", runtime.NewServer(eng, fe))
 	}
-	mux.Handle("/", runtime.NewServer(eng, fe))
 
 	rest := &http.Server{Addr: cfg.Server.RESTAddr, Handler: mux}
 	mcpSrv := buildMCPHTTPServer(cfg.Server.MCPAddr, dbs, verifier)

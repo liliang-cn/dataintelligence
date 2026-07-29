@@ -15,14 +15,20 @@ import (
 
 // Config is the whole service configuration.
 type Config struct {
-	Model      string     `yaml:"model"`      // semantic model YAML path (single-database form)
-	Sources    string     `yaml:"sources"`    // source manifest path (optional)
-	IndexPath  string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
-	Databases  []Database `yaml:"databases"`  // multi-database form; see Defs
-	Warehouse  Warehouse  `yaml:"warehouse"`
-	Auth       Auth       `yaml:"auth"`
-	Governance Governance `yaml:"governance"`
-	Server     Server     `yaml:"server"`
+	Model     string     `yaml:"model"`      // semantic model YAML path (single-database form)
+	Sources   string     `yaml:"sources"`    // source manifest path (optional)
+	IndexPath string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
+	Databases []Database `yaml:"databases"`  // multi-database form; see Defs
+	// DatabasesFile enables runtime registration (POST /v1/databases) and is
+	// where those registrations are stored. Empty (the default) means the only
+	// databases are the ones declared here — an endpoint that opens a DSN the
+	// caller supplies is not something to turn on by accident on a networked
+	// service. A product that ships its own DI sets it.
+	DatabasesFile string     `yaml:"databases_file"`
+	Warehouse     Warehouse  `yaml:"warehouse"`
+	Auth          Auth       `yaml:"auth"`
+	Governance    Governance `yaml:"governance"`
+	Server        Server     `yaml:"server"`
 }
 
 // Database is one governed database: a semantic model over a warehouse.
@@ -88,12 +94,16 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()
-	if len(c.Databases) == 0 {
+	// Zero databases is legitimate only when they can be registered later:
+	// that is a product shipping DI before its user has connected anything.
+	// Without databases_file it is a misconfiguration that would otherwise
+	// surface as an empty service nobody can explain.
+	if len(c.Databases) == 0 && c.DatabasesFile == "" {
 		if c.Model == "" {
-			return nil, fmt.Errorf("config: model is required (or declare databases:)")
+			return nil, fmt.Errorf("config: model is required (or declare databases:, or set databases_file to register them at runtime)")
 		}
 		if c.Warehouse.DSN == "" {
-			return nil, fmt.Errorf("config: warehouse.dsn is required (or declare databases:)")
+			return nil, fmt.Errorf("config: warehouse.dsn is required (or declare databases:, or set databases_file to register them at runtime)")
 		}
 	}
 	return &c, nil
@@ -110,6 +120,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) Defs() []Database {
 	if len(c.Databases) > 0 {
 		return c.Databases
+	}
+	if c.Warehouse.DSN == "" {
+		return nil // nothing declared; databases arrive by registration
 	}
 	return []Database{{ID: "default", Model: c.Model, DSN: c.Warehouse.DSN}}
 }

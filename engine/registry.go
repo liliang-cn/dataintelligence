@@ -53,9 +53,8 @@ type Registry struct {
 // NewRegistry validates the definitions and returns a registry. The first
 // definition is the default for callers that name no database.
 func NewRegistry(defs ...Def) (*Registry, error) {
-	if len(defs) == 0 {
-		return nil, fmt.Errorf("engine: registry needs at least one database")
-	}
+	// An empty registry is a valid starting state: a product ships DI before its
+	// user has connected anything, and databases arrive by registration.
 	r := &Registry{defs: make(map[string]Def, len(defs)), open: map[string]*Engine{}}
 	for _, d := range defs {
 		if d.ID == "" {
@@ -73,7 +72,9 @@ func NewRegistry(defs ...Def) (*Registry, error) {
 		r.defs[d.ID] = d
 		r.order = append(r.order, d.ID)
 	}
-	r.primary = r.order[0]
+	if len(r.order) > 0 {
+		r.primary = r.order[0]
+	}
 	return r, nil
 }
 
@@ -109,6 +110,68 @@ func (r *Registry) RawSQLAllowed(id string) bool {
 	return d.Model == "" || d.AllowRawSQL
 }
 
+// Add registers a database at runtime, replacing any entry of the same id and
+// closing the engine it had open.
+//
+// A product's setup wizard is why this exists: a user types connection details
+// and expects to be querying a minute later, not editing a YAML file and
+// restarting a service. The caller is responsible for deciding whether the
+// requester may do this — the endpoint is gated, and off by default.
+func (r *Registry) Add(d Def) error {
+	if d.ID == "" || !validID(d.ID) {
+		return fmt.Errorf("engine: database id %q must be letters, digits, '-' or '_'", d.ID)
+	}
+	if d.DSN == "" {
+		return fmt.Errorf("engine: database %q needs a dsn", d.ID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if old, ok := r.open[d.ID]; ok {
+		_ = old.Close()
+		delete(r.open, d.ID)
+	}
+	if _, existed := r.defs[d.ID]; !existed {
+		r.order = append(r.order, d.ID)
+	}
+	r.defs[d.ID] = d
+	if r.primary == "" {
+		r.primary = d.ID
+	}
+	return nil
+}
+
+// Remove forgets a database and closes it. The default is never removed while
+// other entries reference it as the fallback; removing it would silently
+// repoint every unqualified request at a different company's data.
+func (r *Registry) Remove(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.defs[id]; !ok {
+		return fmt.Errorf("unknown database %q", id)
+	}
+	if id == r.primary && len(r.order) > 1 {
+		return fmt.Errorf("database %q is the default — an unqualified request would silently move to another database; make another one the default first", id)
+	}
+	if e, ok := r.open[id]; ok {
+		_ = e.Close()
+		delete(r.open, id)
+	}
+	delete(r.defs, id)
+	for i, x := range r.order {
+		if x == id {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+	if id == r.primary {
+		r.primary = ""
+		if len(r.order) > 0 {
+			r.primary = r.order[0]
+		}
+	}
+	return nil
+}
+
 // Get returns the engine for id, opening it on first use. An empty id selects
 // the default. The error names the unknown database and lists what exists,
 // because a typo in a database name is otherwise indistinguishable from a
@@ -124,6 +187,9 @@ func (r *Registry) Get(ctx context.Context, id string) (*Engine, error) {
 	}
 	d, ok := r.defs[id]
 	if !ok {
+		if len(r.order) == 0 {
+			return nil, fmt.Errorf("no database is configured yet — register one with POST /v1/databases")
+		}
 		ids := append([]string(nil), r.order...)
 		sort.Strings(ids)
 		return nil, fmt.Errorf("unknown database %q — configured: %s", id, strings.Join(ids, ", "))

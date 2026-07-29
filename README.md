@@ -157,6 +157,31 @@ mid-conversation; which database to look at is the product's decision, made once
 The single-database form (top-level `model:` + `warehouse.dsn:`) still works and
 becomes one database named `default`.
 
+### Registering a database at runtime
+
+A product's setup wizard needs a user to type connection details and be querying
+a minute later — not edit YAML and restart a service. Set `databases_file:` and
+databases can be registered over the API and survive a restart:
+
+```bash
+curl -XPOST     :41900/v1/databases -d '{"id":"shop","dsn":"mysql://…/shop"}'
+curl -XDELETE   :41900/v1/databases/shop
+```
+
+The DSN is opened before it is saved, so a bad connection string fails while the
+person who typed it is still looking at the form.
+
+This is **off unless `databases_file` is set**. An endpoint that opens a
+connection string the caller supplies is not something to have on by accident on
+a networked service. Config-file databases cannot be removed through the API —
+an operator's YAML is intent, and the entry would reappear on the next restart
+anyway. Nor can the default be removed while others exist: unqualified requests
+would silently move to a different company's data.
+
+With `databases_file` set and nothing declared, DI starts with **zero**
+databases. That is the honest state of a product before its user has connected
+anything, so `/v1` is up and says so rather than refusing to boot.
+
 ### Modelled or not — the gate that decides how a database can be read
 
 Leave `model:` out and the database is **unmodelled**. That is the day-one

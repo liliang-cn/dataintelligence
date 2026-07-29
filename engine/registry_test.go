@@ -80,3 +80,57 @@ func TestPathDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyRegistryIsAValidStartingState(t *testing.T) {
+	// A product ships DI before its user has connected anything.
+	r, err := NewRegistry()
+	if err != nil {
+		t.Fatalf("an empty registry should be allowed: %v", err)
+	}
+	if r.Default() != "" || len(r.IDs()) != 0 {
+		t.Errorf("empty registry should have no default and no ids")
+	}
+	_, err = r.Get(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "no database is configured") {
+		t.Errorf("error should say nothing is configured yet, got %v", err)
+	}
+
+	if err := r.Add(Def{ID: "first", DSN: "sqlite:///tmp/x.db"}); err != nil {
+		t.Fatal(err)
+	}
+	if r.Default() != "first" {
+		t.Errorf("the first registered database should become the default, got %q", r.Default())
+	}
+}
+
+// Removing the database that unqualified requests fall back to would silently
+// repoint them at a different company's data.
+func TestRemovingTheDefaultIsRefusedWhileOthersExist(t *testing.T) {
+	r, _ := NewRegistry(
+		Def{ID: "a", DSN: "sqlite:///tmp/a.db"},
+		Def{ID: "b", DSN: "sqlite:///tmp/b.db"},
+	)
+	if err := r.Remove("a"); err == nil {
+		t.Error("removing the default should be refused while another database exists")
+	}
+	if err := r.Remove("b"); err != nil {
+		t.Errorf("removing a non-default should work: %v", err)
+	}
+	// Last one standing: removing it just empties the registry, which is valid.
+	if err := r.Remove("a"); err != nil {
+		t.Errorf("removing the last database should work: %v", err)
+	}
+}
+
+func TestUnmodelledDatabasesAllowRawSQLAndModelledOnesDoNot(t *testing.T) {
+	r, _ := NewRegistry(
+		Def{ID: "raw", DSN: "sqlite:///tmp/a.db"},
+		Def{ID: "gov", Model: "m.yaml", DSN: "sqlite:///tmp/b.db"},
+		Def{ID: "gov_opt", Model: "m.yaml", DSN: "sqlite:///tmp/c.db", AllowRawSQL: true},
+	)
+	for id, want := range map[string]bool{"raw": true, "gov": false, "gov_opt": true, "nope": false} {
+		if got := r.RawSQLAllowed(id); got != want {
+			t.Errorf("RawSQLAllowed(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
