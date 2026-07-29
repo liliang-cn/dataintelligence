@@ -171,6 +171,19 @@ curl -XDELETE   :41900/v1/databases/shop
 The DSN is opened before it is saved, so a bad connection string fails while the
 person who typed it is still looking at the form.
 
+One more call turns a connected database into a governed one:
+
+```bash
+curl -XPOST :41900/v1/databases/shop/model
+# {"metrics":8,"dimensions":5,"tables":3,"path":"…/models/shop.yaml"}
+```
+
+It introspects the live schema, drafts a model, and re-registers the database as
+governed — which also means `/v1/sql` stops working on it. That is the point. The
+draft is heuristic and the response reports counts rather than implying the
+modelling is finished: someone who knows the business still has to check what
+"revenue" means.
+
 This is **off unless `databases_file` is set**. An endpoint that opens a
 connection string the caller supplies is not something to have on by accident on
 a networked service. Config-file databases cannot be removed through the API —

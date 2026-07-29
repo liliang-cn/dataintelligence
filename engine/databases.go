@@ -23,6 +23,7 @@ type Databases struct {
 	indexDir  string
 	exemplars string
 	store     *Store
+	modelsDir string
 	// Registered marks the ids that came from runtime registration rather than
 	// the config file, so persistence never rewrites the operator's YAML back
 	// into state.
@@ -39,6 +40,12 @@ func NewDatabases(reg *Registry, indexDir, exemplars string) *Databases {
 	return &Databases{Registry: reg, indexDir: indexDir, exemplars: exemplars,
 		registered: map[string]bool{}, grounders: map[string]*grounding.Grounder{}}
 }
+
+// WithModelsDir sets where generated semantic models are written.
+func (d *Databases) WithModelsDir(dir string) *Databases { d.modelsDir = dir; return d }
+
+// ModelsDir is where a generated model would be written ("" = generation off).
+func (d *Databases) ModelsDir() string { return d.modelsDir }
 
 // WithStore enables runtime registration, restoring anything already saved.
 func (d *Databases) WithStore(s *Store) (*Databases, error) {

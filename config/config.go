@@ -24,11 +24,16 @@ type Config struct {
 	// databases are the ones declared here — an endpoint that opens a DSN the
 	// caller supplies is not something to turn on by accident on a networked
 	// service. A product that ships its own DI sets it.
-	DatabasesFile string     `yaml:"databases_file"`
-	Warehouse     Warehouse  `yaml:"warehouse"`
-	Auth          Auth       `yaml:"auth"`
-	Governance    Governance `yaml:"governance"`
-	Server        Server     `yaml:"server"`
+	DatabasesFile string `yaml:"databases_file"`
+	// ModelsDir is where generated semantic models are written. Empty puts them
+	// beside databases_file, so a product that enables runtime registration gets
+	// model generation with it — the two halves of "connect a database, then
+	// govern it" arrive together rather than one working and the other 403-ing.
+	ModelsDir  string     `yaml:"models_dir"`
+	Warehouse  Warehouse  `yaml:"warehouse"`
+	Auth       Auth       `yaml:"auth"`
+	Governance Governance `yaml:"governance"`
+	Server     Server     `yaml:"server"`
 }
 
 // Database is one governed database: a semantic model over a warehouse.

@@ -75,3 +75,9 @@ server:
 # the honest state of a product before its user has connected anything.
 #
 # databases_file: /var/lib/di/databases.json
+#
+# models_dir: where POST /v1/databases/{id}/model writes generated semantic
+# models. Empty puts them beside databases_file, so "connect a database" and
+# "then govern it" arrive together rather than one working and the other 403-ing.
+#
+# models_dir: /var/lib/di/models

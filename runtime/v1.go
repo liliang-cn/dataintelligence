@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 
@@ -76,6 +77,7 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/databases", v.databasesV1)
 	mux.HandleFunc("POST /v1/databases", v.databaseAddV1)
 	mux.HandleFunc("DELETE /v1/databases/{id}", v.databaseDeleteV1)
+	mux.HandleFunc("POST /v1/databases/{id}/model", v.databaseModelV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
@@ -529,4 +531,81 @@ func (v *V1) databaseDeleteV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "removed": r.PathValue("id")})
+}
+
+// databaseModelV1 drafts a semantic model from a database's live schema and
+// switches that database to governed.
+//
+// This is the one button that turns "connected, exploring with SQL" into
+// "answers come from declared metrics", so it belongs where the introspection
+// and the compiler already are. The draft is heuristic and says so: it is a
+// starting point for someone who knows the business, not a finished model —
+// which is why the response reports the metric count rather than implying the
+// modelling is done.
+func (v *V1) databaseModelV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	dir := v.DBs.ModelsDir()
+	if dir == "" || !v.DBs.CanRegister() {
+		writeErr(w, 403, errString(
+			"model generation is disabled — set databases_file (and optionally models_dir) in the config"))
+		return
+	}
+	def, ok := v.DBs.Def(id)
+	if !ok {
+		writeErr(w, 404, errString(fmt.Sprintf("unknown database %q", id)))
+		return
+	}
+	eng, _, err := v.DBs.Resolve(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	schema, err := modelgen.Introspect(r.Context(), eng.WH)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	model, issues, err := modelgen.Generate(r.Context(), schema, nil)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	yamlOut, err := modelgen.ToYAML(model)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	path := filepath.Join(dir, id+".yaml")
+	if err := os.WriteFile(path, yamlOut, 0o600); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	// Re-register with the model attached: the database is governed from here,
+	// which also means /v1/sql stops working on it. That is the point.
+	def.Model = path
+	if err := v.DBs.Register(r.Context(), def); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	notes := []string{}
+	for _, is := range issues {
+		notes = append(notes, is.Message)
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "database": id, "path": path,
+		"tables": len(schema.Tables), "metrics": len(model.Metrics),
+		"dimensions": len(model.Dimensions), "entities": len(model.Entities),
+		"notes": notes,
+	})
 }

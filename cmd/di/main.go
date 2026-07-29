@@ -241,6 +241,11 @@ func runServe(argv []string) {
 		if dbs, err = dbs.WithStore(engine.NewStore(cfg.DatabasesFile)); err != nil {
 			fail(err)
 		}
+		modelsDir := cfg.ModelsDir
+		if modelsDir == "" {
+			modelsDir = filepath.Join(filepath.Dir(cfg.DatabasesFile), "models")
+		}
+		dbs = dbs.WithModelsDir(modelsDir)
 	}
 	defer dbs.Close()
 
