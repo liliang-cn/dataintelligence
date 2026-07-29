@@ -39,8 +39,13 @@ type Config struct {
 // is restricted to letters, digits, '-' and '_'.
 type Database struct {
 	ID    string `yaml:"id"`
-	Model string `yaml:"model"`
+	Model string `yaml:"model"` // empty → unmodelled: direct SQL only, no governed tools
 	DSN   string `yaml:"dsn"`
+
+	// AllowRawSQL opens POST /v1/sql on a *modelled* database. Off by default:
+	// modelling a warehouse means answers come from declared metrics, and an
+	// open SQL path beside them quietly makes that optional.
+	AllowRawSQL bool `yaml:"allow_raw_sql"`
 }
 
 type Warehouse struct {

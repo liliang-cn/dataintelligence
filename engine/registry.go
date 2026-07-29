@@ -8,11 +8,26 @@ import (
 	"sync"
 )
 
-// Def declares one governed database: a semantic model over a warehouse.
+// Def declares one database.
+//
+// A database is either modelled or not, and that decides how it can be read:
+//
+//   - Model set    → governed. Metrics only; raw SQL is refused unless AllowRawSQL.
+//   - Model empty  → unmodelled. Raw SQL only; there are no metrics to expose,
+//     so it gets no MCP endpoint at all.
+//
+// This is the gate that matters, and it lives here rather than in whichever
+// client happens to be asking. A product may also decline to offer raw SQL to
+// its model — it should — but that is defence in depth on top of this.
 type Def struct {
 	ID    string // stable name callers select by ("shop", "conglomerate")
-	Model string // semantic model YAML path
+	Model string // semantic model YAML path; empty → unmodelled
 	DSN   string // warehouse DSN; the scheme picks driver and dialect
+
+	// AllowRawSQL permits /v1/sql against a modelled database. Off by default:
+	// the point of modelling a database is that answers come from declared
+	// metrics, and an open SQL path beside it silently makes that optional.
+	AllowRawSQL bool
 }
 
 // Registry serves several governed databases from one process.
@@ -52,8 +67,8 @@ func NewRegistry(defs ...Def) (*Registry, error) {
 		if _, dup := r.defs[d.ID]; dup {
 			return nil, fmt.Errorf("engine: duplicate database id %q", d.ID)
 		}
-		if d.Model == "" || d.DSN == "" {
-			return nil, fmt.Errorf("engine: database %q needs both a model and a dsn", d.ID)
+		if d.DSN == "" {
+			return nil, fmt.Errorf("engine: database %q needs a dsn", d.ID)
 		}
 		r.defs[d.ID] = d
 		r.order = append(r.order, d.ID)
@@ -72,6 +87,26 @@ func (r *Registry) Default() string { return r.primary }
 func (r *Registry) Has(id string) bool {
 	_, ok := r.defs[id]
 	return ok
+}
+
+// Def returns the declaration for id ("" → default), without opening it.
+func (r *Registry) Def(id string) (Def, bool) {
+	if id == "" {
+		id = r.primary
+	}
+	d, ok := r.defs[id]
+	return d, ok
+}
+
+// RawSQLAllowed reports whether raw SQL may run against this database:
+// always for an unmodelled one, and for a modelled one only when the config
+// says so explicitly.
+func (r *Registry) RawSQLAllowed(id string) bool {
+	d, ok := r.Def(id)
+	if !ok {
+		return false
+	}
+	return d.Model == "" || d.AllowRawSQL
 }
 
 // Get returns the engine for id, opening it on first use. An empty id selects

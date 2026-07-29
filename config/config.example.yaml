@@ -50,3 +50,17 @@ server:
 #   - id: export
 #     model: models/export.yaml
 #     dsn: sqlite:///data/export.db
+#
+# Leave `model:` out and the database is UNMODELLED: no MCP endpoint, no
+# metrics, read-only direct SQL via POST /v1/sql. That is the day-one state —
+# connected, nothing modelled yet, someone still has to look around.
+#
+#   - id: staging
+#     dsn: postgres://user:pass@host:5432/staging
+#
+# On a MODELLED database /v1/sql is refused; set allow_raw_sql to permit it.
+#
+#   - id: shop
+#     model: models/shop.yaml
+#     dsn: mysql://user:pass@host:3306/shop
+#     allow_raw_sql: false

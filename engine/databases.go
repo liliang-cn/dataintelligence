@@ -46,6 +46,11 @@ func (d *Databases) Resolve(ctx context.Context, id string) (*Engine, *grounding
 	if id == "" {
 		id = d.Default()
 	}
+	// Grounding resolves a question against a semantic model; an unmodelled
+	// database has none, so there is nothing to index and nothing to ground.
+	if !eng.Governed() {
+		return eng, nil, nil
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if g, ok := d.grounders[id]; ok {

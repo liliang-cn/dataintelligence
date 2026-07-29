@@ -157,6 +157,30 @@ mid-conversation; which database to look at is the product's decision, made once
 The single-database form (top-level `model:` + `warehouse.dsn:`) still works and
 becomes one database named `default`.
 
+### Modelled or not — the gate that decides how a database can be read
+
+Leave `model:` out and the database is **unmodelled**. That is the day-one
+state: connected, nothing modelled yet, and someone needs to look around before
+they can declare a single metric.
+
+| | modelled | unmodelled |
+|---|---|---|
+| MCP endpoint | yes — `list_metrics` / `get_dimensions` / `query_metric` | **none** |
+| `POST /v1/query` | yes | no — there are no metrics |
+| `POST /v1/sql` | refused unless `allow_raw_sql: true` | yes, read-only |
+
+The refusal is enforced here, in the engine, not in whichever client is asking.
+A product should *also* decline to hand its model a raw-SQL tool — but that is
+defence in depth on top of this, not the load-bearing part.
+
+An unmodelled database gets no MCP endpoint at all rather than one with an empty
+metric list: to an agent, "no metrics" reads as *this business has no revenue*,
+not *nobody has modelled this yet*.
+
+`POST /v1/sql` is deliberately not an MCP tool and will not become one. It exists
+for a trusted first-party product exploring a database before there is a semantic
+layer to go through. Every call is audited with the statement and row count.
+
 ## Warehouses
 
 The backend and the SQL dialect are both chosen from the DSN scheme, together —

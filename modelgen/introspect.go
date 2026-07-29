@@ -114,6 +114,29 @@ var probes = map[string]probe{
 	},
 }
 
+// TableNames lists the user tables of a warehouse on any supported engine.
+//
+// It exists because "list the tables" was written three times — once per
+// surface — each time against pg_tables, and each copy broke silently the day
+// the warehouse was not Postgres.
+func TableNames(ctx context.Context, wh *warehouse.Warehouse) ([]string, error) {
+	p, ok := probes[wh.Driver()]
+	if !ok {
+		return nil, fmt.Errorf("no schema introspection for driver %q", wh.Driver())
+	}
+	res, err := wh.Query(ctx, p.tables)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, row := range res.Rows {
+		if name := str(row[0]); name != "" && !strings.HasPrefix(name, "_") {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
 // Introspect reads the user tables of a warehouse, skipping the platform's own
 // bookkeeping tables (those prefixed with "_").
 func Introspect(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {

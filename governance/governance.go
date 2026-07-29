@@ -7,6 +7,9 @@ package governance
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	semantic "github.com/liliang-cn/semantic-go"
@@ -293,10 +296,74 @@ func stripQuotes(s string) string {
 }
 
 func audit(ctx context.Context, eng *engine.Engine, p Principal, q semantic.Query, sql string, refused bool, note string) {
-	_, _ = eng.WH.Exec(ctx, `CREATE TABLE IF NOT EXISTS _audit (
+	writeAudit(ctx, eng, p, fmt.Sprintf("%v", q.Metrics), fmt.Sprintf("%v", q.GroupBy), sql, refused, note)
+}
+
+// AuditRawSQL records a direct read against an unmodelled database. Raw SQL is
+// the path with no semantic layer vouching for it, so the trail is the only
+// thing left that says what was actually run.
+func AuditRawSQL(ctx context.Context, eng *engine.Engine, p Principal, database, sql string, rows int) {
+	writeAudit(ctx, eng, p, "", "", sql, false,
+		fmt.Sprintf("raw sql on %s · %d row(s)", database, rows))
+}
+
+// auditDDL is per-engine because the types and the default-now spelling are.
+// "user" and "sql" are reserved words in more than one engine, hence the
+// quoting everywhere.
+var auditDDL = map[string]string{
+	"pgx": `CREATE TABLE IF NOT EXISTS _audit (
 		ts timestamptz DEFAULT now(), "user" text, role text,
-		metrics text, group_by text, sql text, refused bool, note text)`)
-	_, _ = eng.WH.Exec(ctx,
-		`INSERT INTO _audit ("user", role, metrics, group_by, sql, refused, note) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		p.User, p.Role, fmt.Sprintf("%v", q.Metrics), fmt.Sprintf("%v", q.GroupBy), sql, refused, note)
+		metrics text, group_by text, sql text, refused bool, note text)`,
+	"mysql": "CREATE TABLE IF NOT EXISTS _audit (" +
+		"ts DATETIME DEFAULT CURRENT_TIMESTAMP, `user` VARCHAR(190), role VARCHAR(190)," +
+		"metrics TEXT, group_by TEXT, `sql` TEXT, refused BOOLEAN, note TEXT)",
+	"sqlite": `CREATE TABLE IF NOT EXISTS _audit (
+		ts TEXT DEFAULT (datetime('now')), "user" TEXT, role TEXT,
+		metrics TEXT, group_by TEXT, "sql" TEXT, refused INTEGER, note TEXT)`,
+	"sqlserver": `IF OBJECT_ID('_audit','U') IS NULL CREATE TABLE _audit (
+		ts DATETIME2 DEFAULT SYSUTCDATETIME(), [user] NVARCHAR(190), role NVARCHAR(190),
+		metrics NVARCHAR(MAX), group_by NVARCHAR(MAX), [sql] NVARCHAR(MAX), refused BIT, note NVARCHAR(MAX))`,
+	"duckdb": `CREATE TABLE IF NOT EXISTS _audit (
+		ts TIMESTAMP DEFAULT now(), "user" VARCHAR, role VARCHAR,
+		metrics VARCHAR, group_by VARCHAR, "sql" VARCHAR, refused BOOLEAN, note VARCHAR)`,
+}
+
+// writeAudit appends one row to the trail.
+//
+// Failures were swallowed here, and once the service grew past Postgres that
+// silence became a hole: the DDL and the $1 placeholders are Postgres-only, so
+// on MySQL, SQLite and SQL Server every insert failed and every request looked
+// audited. A trail that is quietly empty is worse than none — it is believed.
+// Failures now surface on stderr, once per engine, rather than never.
+func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, groupBy, sql string, refused bool, note string) {
+	driver := eng.WH.Driver()
+	ddl, ok := auditDDL[driver]
+	if !ok {
+		auditProblem(driver, fmt.Errorf("no audit schema for driver %q", driver))
+		return
+	}
+	if _, err := eng.WH.Exec(ctx, ddl); err != nil {
+		auditProblem(driver, err)
+		return
+	}
+	cols := []string{"user", "role", "metrics", "group_by", "sql", "refused", "note"}
+	quoted := make([]string, len(cols))
+	holders := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = eng.Dialect.QuoteIdent(c)
+		holders[i] = eng.Dialect.Placeholder(i + 1)
+	}
+	stmt := fmt.Sprintf("INSERT INTO _audit (%s) VALUES (%s)",
+		strings.Join(quoted, ", "), strings.Join(holders, ", "))
+	if _, err := eng.WH.Exec(ctx, stmt, p.User, p.Role, metrics, groupBy, sql, refused, note); err != nil {
+		auditProblem(driver, err)
+	}
+}
+
+var auditWarned sync.Map
+
+func auditProblem(driver string, err error) {
+	if _, seen := auditWarned.LoadOrStore(driver, true); !seen {
+		fmt.Fprintf(os.Stderr, "-- audit trail is NOT being written (%s): %v\n", driver, err)
+	}
 }

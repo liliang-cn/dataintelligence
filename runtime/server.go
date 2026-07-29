@@ -16,6 +16,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
+	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/nleval"
 	"github.com/liliang-cn/dataintelligence/obs"
 )
@@ -165,15 +166,10 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tables(w http.ResponseWriter, r *http.Request) {
-	res, err := s.eng.WH.Query(r.Context(),
-		`SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`)
+	names, err := modelgen.TableNames(r.Context(), s.eng.WH)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
-	}
-	var names []string
-	for _, row := range res.Rows {
-		names = append(names, toStr(row[0]))
 	}
 	writeJSON(w, 200, names)
 }
@@ -190,7 +186,8 @@ func (s *Server) explore(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	res, err := s.eng.WH.Query(r.Context(), `SELECT * FROM "`+table+`" LIMIT `+strconv.Itoa(limit))
+	res, err := s.eng.WH.Query(r.Context(),
+		"SELECT * FROM "+s.eng.Dialect.QuoteIdent(table)+" LIMIT "+strconv.Itoa(limit))
 	if err != nil {
 		writeErr(w, 400, err)
 		return

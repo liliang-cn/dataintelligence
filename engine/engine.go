@@ -24,10 +24,20 @@ type Engine struct {
 // New loads a semantic model from YAML and opens the warehouse. When
 // DI_DB_APP_ROLE is set, governed queries run as that least-privilege role so the
 // warehouse's own RLS engages (on-behalf-of, belt-and-suspenders).
+// An empty modelPath opens the warehouse without a semantic model. Such a
+// database is *unmodelled*: it has no metrics, so the governed tools have
+// nothing to offer and are not exposed for it at all. It exists so a product
+// can let a user connect to a database and explore it before anyone has
+// modelled it — the day-one path — without that exploration being mistaken for
+// a governed answer. Governed(nil model) is false, and every governed entry
+// point checks it.
 func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
-	m, err := semantic.LoadFile(modelPath)
-	if err != nil {
-		return nil, err
+	var m *semantic.Model
+	if modelPath != "" {
+		var err error
+		if m, err = semantic.LoadFile(modelPath); err != nil {
+			return nil, err
+		}
 	}
 	opts := warehouse.Options{
 		AppRole:      os.Getenv("DI_DB_APP_ROLE"),
@@ -60,6 +70,12 @@ func dialectFor(driver string) semantic.Dialect {
 }
 
 func (e *Engine) Close() error { return e.WH.Close() }
+
+// Governed reports whether this database has a semantic model. An unmodelled
+// database can only be read with raw SQL; a modelled one can only be read
+// through its metrics. That is the whole distinction, and it is decided here
+// rather than by each caller's idea of what is safe.
+func (e *Engine) Governed() bool { return e.Model != nil }
 
 // envBytes reads a byte budget from the environment (plain integer bytes),
 // returning 0 (disabled) when unset or unparseable.

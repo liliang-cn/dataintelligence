@@ -290,3 +290,32 @@ func (w *Warehouse) scan(rows *sql.Rows, query string, start time.Time) (*Result
 	res.Elapsed = time.Since(start)
 	return res, nil
 }
+
+// QueryReadOnly runs one caller-supplied read inside a read-only transaction,
+// under the same timeout and row cap as any other query.
+//
+// This is the raw-SQL path, and it is deliberately not an MCP tool: an agent
+// pointed at a modelled warehouse must ask for metrics. It exists for a trusted
+// first-party product exploring a database nobody has modelled yet — the
+// day-one path, before there is a semantic layer to go through.
+func (w *Warehouse) QueryReadOnly(ctx context.Context, query string, args ...any) (*Result, error) {
+	if err := ReadOnly(query); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
+	defer cancel()
+
+	start := time.Now()
+	// See QueryAs for why SQL Server gets no read-only flag.
+	tx, err := w.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: w.driver != "sqlserver"})
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+	return w.scan(rows, query, start)
+}

@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strings"
 
 	semantic "github.com/liliang-cn/semantic-go"
@@ -11,6 +14,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/obs"
 )
 
@@ -37,6 +41,25 @@ func (v *V1) resolve(w http.ResponseWriter, r *http.Request) (*engine.Engine, *g
 	return eng, gr, true
 }
 
+// resolveGoverned is resolve for the metric-shaped endpoints. An unmodelled
+// database has no metrics to serve, and saying so beats the empty list a nil
+// model would otherwise produce — "no metrics" and "not modelled yet" mean
+// very different things to whoever is looking.
+func (v *V1) resolveGoverned(w http.ResponseWriter, r *http.Request) (*engine.Engine, *grounding.Grounder, bool) {
+	eng, gr, ok := v.resolve(w, r)
+	if !ok {
+		return nil, nil, false
+	}
+	if !eng.Governed() {
+		writeErr(w, 409, errString(fmt.Sprintf(
+			"database %q has no semantic model — there are no metrics to query. "+
+				"Explore it with POST /v1/sql, or generate a model with: di model gen -dsn … -out <model>.yaml",
+			orDefault(engine.DatabaseFromRequest(r), v.DBs.Default()))))
+		return nil, nil, false
+	}
+	return eng, gr, true
+}
+
 // Handler returns the /v1 mux wrapped with recover + trace-context middleware.
 func (v *V1) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -47,6 +70,9 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/query", v.queryV1)
 	mux.HandleFunc("POST /v1/ground", v.groundV1)
 	mux.HandleFunc("POST /v1/ask", v.askV1)
+	mux.HandleFunc("GET /v1/databases", v.databasesV1)
+	mux.HandleFunc("GET /v1/tables", v.tablesV1)
+	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	return v.middleware(mux)
 }
 
@@ -55,6 +81,10 @@ func (v *V1) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// The caller still gets a generic 500 — a panic message can carry
+				// internals — but swallowing it entirely left "internal error" as
+				// the only evidence anything went wrong, which is undebuggable.
+				fmt.Fprintf(os.Stderr, "-- panic in %s %s: %v\n%s\n", r.Method, r.URL.Path, rec, debug.Stack())
 				writeErr(w, 500, errString("internal error"))
 			}
 		}()
@@ -105,7 +135,7 @@ func (v *V1) principalFrom(r *http.Request) (governance.Principal, bool, error) 
 }
 
 func (v *V1) metricsV1(w http.ResponseWriter, r *http.Request) {
-	eng, _, ok := v.resolve(w, r)
+	eng, _, ok := v.resolveGoverned(w, r)
 	if !ok {
 		return
 	}
@@ -125,7 +155,7 @@ func (v *V1) metricsV1(w http.ResponseWriter, r *http.Request) {
 }
 
 func (v *V1) dimensionsV1(w http.ResponseWriter, r *http.Request) {
-	eng, _, ok := v.resolve(w, r)
+	eng, _, ok := v.resolveGoverned(w, r)
 	if !ok {
 		return
 	}
@@ -143,7 +173,7 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err)
 		return
 	}
-	eng, _, ok := v.resolve(w, r)
+	eng, _, ok := v.resolveGoverned(w, r)
 	if !ok {
 		return
 	}
@@ -168,7 +198,7 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 }
 
 func (v *V1) groundV1(w http.ResponseWriter, r *http.Request) {
-	_, gr, ok := v.resolve(w, r)
+	_, gr, ok := v.resolveGoverned(w, r)
 	if !ok {
 		return
 	}
@@ -201,7 +231,7 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err)
 		return
 	}
-	eng, gr, ok := v.resolve(w, r)
+	eng, gr, ok := v.resolveGoverned(w, r)
 	if !ok {
 		return
 	}
@@ -269,4 +299,86 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// databasesV1 lists the configured databases and whether each is governed, so a
+// product can render a database picker without guessing which mode it will get.
+func (v *V1) databasesV1(w http.ResponseWriter, r *http.Request) {
+	type dbi struct {
+		ID       string `json:"id"`
+		Governed bool   `json:"governed"`
+		RawSQL   bool   `json:"raw_sql"`
+		Default  bool   `json:"default,omitempty"`
+	}
+	out := []dbi{}
+	for _, id := range v.DBs.IDs() {
+		d, _ := v.DBs.Def(id)
+		out = append(out, dbi{ID: id, Governed: d.Model != "",
+			RawSQL: v.DBs.RawSQLAllowed(id), Default: id == v.DBs.Default()})
+	}
+	writeJSON(w, 200, map[string]any{"databases": out, "default": v.DBs.Default()})
+}
+
+// tablesV1 lists a database's tables on any supported engine.
+func (v *V1) tablesV1(w http.ResponseWriter, r *http.Request) {
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	names, err := modelgen.TableNames(r.Context(), eng.WH)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"tables": names})
+}
+
+// sqlV1 runs one read-only statement against an UNMODELLED database.
+//
+// It is not an MCP tool and never will be: an agent pointed at a modelled
+// warehouse must ask for metrics, and the moment raw SQL sits beside them as a
+// tool the model will reach for it. This endpoint serves a trusted first-party
+// product exploring a database nobody has modelled yet — the day-one path,
+// before there is a semantic layer to go through.
+//
+// Against a modelled database it is refused unless that database opted in with
+// allow_raw_sql. Modelling a warehouse means answers come from declared
+// metrics; an open SQL path beside it quietly makes that optional, and the
+// refusal says which metric path to use instead.
+func (v *V1) sqlV1(w http.ResponseWriter, r *http.Request) {
+	p, ok, err := v.principalFrom(r)
+	if !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := engine.DatabaseFromRequest(r)
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	if !v.DBs.RawSQLAllowed(id) {
+		writeErr(w, 403, errString(fmt.Sprintf(
+			"database %q has a semantic model: query it with POST /v1/query (metrics + group_by), "+
+				"or set allow_raw_sql on that database to permit direct SQL",
+			orDefault(id, v.DBs.Default()))))
+		return
+	}
+	var body struct {
+		SQL string `json:"sql"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	res, err := eng.WH.QueryReadOnly(r.Context(), body.SQL)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	governance.AuditRawSQL(r.Context(), eng, p, orDefault(id, v.DBs.Default()), body.SQL, res.RowCount)
+	writeJSON(w, 200, map[string]any{
+		"columns": res.Columns, "rows": res.Rows,
+		"row_count": res.RowCount, "truncated": res.Truncated,
+		"elapsed_ms": res.Elapsed.Milliseconds(),
+	})
 }

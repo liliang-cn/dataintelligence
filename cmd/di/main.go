@@ -220,7 +220,7 @@ func runServe(argv []string) {
 
 	defs := make([]engine.Def, 0, len(cfg.Defs()))
 	for _, d := range cfg.Defs() {
-		defs = append(defs, engine.Def{ID: d.ID, Model: d.Model, DSN: d.DSN})
+		defs = append(defs, engine.Def{ID: d.ID, Model: d.Model, DSN: d.DSN, AllowRawSQL: d.AllowRawSQL})
 	}
 	reg, err := engine.NewRegistry(defs...)
 	if err != nil {
@@ -279,8 +279,17 @@ func runServe(argv []string) {
 	ids := reg.IDs()
 	fmt.Fprintf(os.Stderr, "  databases (%d, default %q):\n", len(ids), reg.Default())
 	for _, id := range ids {
-		fmt.Fprintf(os.Stderr, "    %-20s MCP %s%s   REST  X-DI-Database: %s\n",
-			id, cfg.Server.MCPAddr, engine.MountPath(id), id)
+		d, _ := reg.Def(id)
+		if d.Model == "" {
+			fmt.Fprintf(os.Stderr, "    %-20s unmodelled — direct SQL only (POST /v1/sql, X-DI-Database: %s)\n", id, id)
+			continue
+		}
+		raw := ""
+		if d.AllowRawSQL {
+			raw = "  + raw sql"
+		}
+		fmt.Fprintf(os.Stderr, "    %-20s MCP %s%s   REST  X-DI-Database: %s%s\n",
+			id, cfg.Server.MCPAddr, engine.MountPath(id), id, raw)
 	}
 
 	select {
@@ -313,11 +322,20 @@ func serveNamed(name string, s *http.Server) error {
 func buildMCPHTTPServer(addr string, dbs *engine.Databases, verifier auth.TokenVerifier) *http.Server {
 	checks := envOr("DI_CHECKS", "examples/meridian/conflicts.yaml")
 	handler := mcpsdk.NewStreamableHTTPHandler(func(r *http.Request) *mcpsdk.Server {
-		eng, gr, err := dbs.Resolve(r.Context(), engine.DatabaseFromRequest(r))
+		id := engine.DatabaseFromRequest(r)
+		eng, gr, err := dbs.Resolve(r.Context(), id)
 		if err != nil {
 			// The SDK has nowhere to report a factory error, so serve a server
 			// whose every tool says which database was asked for and failed.
 			return mcpserver.NewUnavailableServer(err)
+		}
+		// An unmodelled database has no metrics, so it gets no governed tools.
+		// Exposing empty ones would read, to an agent, as "this business has no
+		// revenue" rather than "nobody has modelled this yet".
+		if !eng.Governed() {
+			return mcpserver.NewUnavailableServer(fmt.Errorf(
+				"database %q has no semantic model — it is available for direct SQL only (POST /v1/sql)",
+				orDefaultStr(id, dbs.Default())))
 		}
 		opts := &mcpserver.Options{
 			Default:    mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}},
