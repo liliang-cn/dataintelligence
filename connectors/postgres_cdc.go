@@ -20,6 +20,29 @@ type PostgresCDC struct {
 	cursor    int64
 }
 
+// SetCursor resumes from a persisted watermark (e.g. loaded from a sync-state
+// table) so Poll only emits rows added after that point.
+func (c *PostgresCDC) SetCursor(v int64) { c.cursor = v }
+
+// Cursor returns the current watermark (the max cursor value seen so far).
+func (c *PostgresCDC) Cursor() int64 { return c.cursor }
+
+// cdcString renders a scanned value into a warehouse-parseable text form for the
+// staging round-trip. time.Time must be an ISO string (not Go's default
+// "... +0000 UTC"), or `::timestamp` casts downstream fail.
+func cdcString(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case time.Time:
+		return x.Format("2006-01-02 15:04:05.999999")
+	case []byte:
+		return string(x)
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
 // StartCursor sets the watermark to the table's current max (so Subscribe only
 // emits rows added afterward — i.e. "tail -f" semantics).
 func (c *PostgresCDC) StartCursor(ctx context.Context) error {
@@ -43,7 +66,7 @@ func (c *PostgresCDC) Poll(ctx context.Context) ([]ChangeEvent, error) {
 	for _, row := range res.Rows {
 		rec := make(Record, len(res.Columns))
 		for i, col := range res.Columns {
-			rec[col] = fmt.Sprintf("%v", row[i])
+			rec[col] = cdcString(row[i])
 		}
 		cur := toInt64(row[ci])
 		if cur > c.cursor {
@@ -113,7 +136,7 @@ func (c *PostgresCDC) Read(ctx context.Context) (Batch, error) {
 	for _, row := range res.Rows {
 		rec := make(Record, len(res.Columns))
 		for i, col := range res.Columns {
-			rec[col] = fmt.Sprintf("%v", row[i])
+			rec[col] = cdcString(row[i])
 		}
 		batch.Rows = append(batch.Rows, rec)
 	}
