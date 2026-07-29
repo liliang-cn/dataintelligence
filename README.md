@@ -181,6 +181,45 @@ not *nobody has modelled this yet*.
 for a trusted first-party product exploring a database before there is a semantic
 layer to go through. Every call is audited with the statement and row count.
 
+## The pre-ingestion gate
+
+Row-level checks — types, keys, foreign keys — do not catch the expensive
+failures, because those are aggregate-level. A file imported twice. An amount
+column that switched from yuan to cents. A store that quietly stopped reporting.
+Every row is valid, the totals are wrong, and nothing errors.
+
+So a batch lands in a **branch** first — a `br_<name>` schema holding a copy of
+the affected tables — and is compared with production before anyone commits to it:
+
+```bash
+curl -XPOST  :41900/v1/branch          -d '{"name":"jan","tables":["orders"]}'
+# … load the batch into br_jan …
+curl         ':41900/v1/branch/diff?name=jan'
+curl -XPOST  :41900/v1/branch/promote  -d '{"name":"jan"}'   # or /discard
+```
+
+The diff reports row counts and the total of every measure, per table, and names
+what looks wrong:
+
+| batch | what the diff says |
+|---|---|
+| ordinary +60 rows | no signals |
+| same file loaded twice | `row count exactly doubled — a duplicate load` |
+| yuan became cents | `row count barely moved but amount rose +9900.0% — a unit or definition change` |
+| a store stopped reporting | `branch has 1000 fewer rows than production` |
+
+Key columns are excluded from the totals: summing a climbing primary key makes
+every ordinary load look like a 66744% change, and a gate that fires every time
+is one people learn to click past.
+
+Only the diff is a read. Promote replaces production's data — in one
+transaction, so a failure partway cannot leave some tables swapped, one emptied,
+and no way to tell which — and it is never exposed as an agent-callable tool.
+
+PostgreSQL only for now: in MySQL a schema *is* a database and SQLite is a single
+file, so each needs its own mechanism. Calling it elsewhere says so rather than
+doing something half-right.
+
 ## Warehouses
 
 The backend and the SQL dialect are both chosen from the DSN scheme, together —

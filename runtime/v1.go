@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,11 +12,13 @@ import (
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 
+	"github.com/liliang-cn/dataintelligence/branch"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
 	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/obs"
+	"github.com/liliang-cn/dataintelligence/warehouse"
 )
 
 // V1 is the stable, versioned data-plane API: governed semantic query, NL
@@ -73,6 +76,10 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/databases", v.databasesV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
+	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
+	mux.HandleFunc("GET /v1/branch/diff", v.branchDiffV1)
+	mux.HandleFunc("POST /v1/branch/promote", v.branchPromoteV1)
+	mux.HandleFunc("POST /v1/branch/discard", v.branchDiscardV1)
 	return v.middleware(mux)
 }
 
@@ -381,4 +388,87 @@ func (v *V1) sqlV1(w http.ResponseWriter, r *http.Request) {
 		"row_count": res.RowCount, "truncated": res.Truncated,
 		"elapsed_ms": res.Elapsed.Milliseconds(),
 	})
+}
+
+// --- pre-ingestion branch gate -------------------------------------------
+//
+// Load a batch into a copy of the affected tables, compare the aggregates with
+// production, and only then decide. Row-level checks cannot catch a file
+// imported twice or a column that changed units: every row is valid and the
+// totals are wrong.
+//
+// Only the diff is a read. Create, promote and discard change data, so they are
+// POSTs a human triggers — and promote, the one that touches production, is
+// never exposed as an agent-callable tool anywhere.
+
+func (v *V1) branchCreateV1(w http.ResponseWriter, r *http.Request) {
+	eng, ok := v.branchEngine(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name   string   `json:"name"`
+		Tables []string `json:"tables"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		writeErr(w, 400, errString("name is required"))
+		return
+	}
+	out, err := branch.Create(r.Context(), eng.WH, body.Name, body.Tables)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (v *V1) branchDiffV1(w http.ResponseWriter, r *http.Request) {
+	eng, ok := v.branchEngine(w, r)
+	if !ok {
+		return
+	}
+	rep, err := branch.Diff(r.Context(), eng.WH, r.URL.Query().Get("name"))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, rep)
+}
+
+func (v *V1) branchPromoteV1(w http.ResponseWriter, r *http.Request) {
+	v.branchAction(w, r, branch.Promote)
+}
+
+func (v *V1) branchDiscardV1(w http.ResponseWriter, r *http.Request) {
+	v.branchAction(w, r, branch.Discard)
+}
+
+func (v *V1) branchAction(w http.ResponseWriter, r *http.Request,
+	fn func(context.Context, *warehouse.Warehouse, string) (map[string]any, error)) {
+	eng, ok := v.branchEngine(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		writeErr(w, 400, errString("name is required"))
+		return
+	}
+	out, err := fn(r.Context(), eng.WH, body.Name)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (v *V1) branchEngine(w http.ResponseWriter, r *http.Request) (*engine.Engine, bool) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return nil, false
+	}
+	eng, _, ok := v.resolve(w, r)
+	return eng, ok
 }
