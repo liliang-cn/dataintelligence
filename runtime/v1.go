@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/modelcontextprotocol/go-sdk/auth"
 	semantic "github.com/liliang-cn/semantic-go"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -20,10 +20,21 @@ import (
 // the warehouse. It shares the exact governance/identity/observability core with
 // the MCP server — one engine, two contracts.
 type V1 struct {
-	Eng    *engine.Engine
-	Gr     *grounding.Grounder
+	DBs    *engine.Databases
 	Pol    governance.Policy
 	Verify auth.TokenVerifier // nil → open (dev): identity from X-DI-* headers
+}
+
+// resolve picks the database this request is for (X-DI-Database, ?database=,
+// or the default) and returns its engine and grounder. An unknown name is a
+// 404 naming what is configured, not a confusing failure further down.
+func (v *V1) resolve(w http.ResponseWriter, r *http.Request) (*engine.Engine, *grounding.Grounder, bool) {
+	eng, gr, err := v.DBs.Resolve(r.Context(), engine.DatabaseFromRequest(r))
+	if err != nil {
+		writeErr(w, 404, err)
+		return nil, nil, false
+	}
+	return eng, gr, true
 }
 
 // Handler returns the /v1 mux wrapped with recover + trace-context middleware.
@@ -55,7 +66,11 @@ func (v *V1) middleware(next http.Handler) http.Handler {
 }
 
 func (v *V1) readyz(w http.ResponseWriter, r *http.Request) {
-	if _, err := v.Eng.WH.Query(r.Context(), "SELECT 1"); err != nil {
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	if _, err := eng.WH.Query(r.Context(), "SELECT 1"); err != nil {
 		writeErr(w, 503, err)
 		return
 	}
@@ -89,7 +104,11 @@ func (v *V1) principalFrom(r *http.Request) (governance.Principal, bool, error) 
 	}, true, nil
 }
 
-func (v *V1) metricsV1(w http.ResponseWriter, _ *http.Request) {
+func (v *V1) metricsV1(w http.ResponseWriter, r *http.Request) {
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
 	type mi struct {
 		Name        string   `json:"name"`
 		Description string   `json:"description"`
@@ -98,15 +117,19 @@ func (v *V1) metricsV1(w http.ResponseWriter, _ *http.Request) {
 		Roles       []string `json:"roles,omitempty"`
 	}
 	out := []mi{}
-	for i := range v.Eng.Model.Metrics {
-		m := &v.Eng.Model.Metrics[i]
-		out = append(out, mi{m.Name, m.Description, m.Synonyms, v.Eng.Model.Additivity(m.Name), m.Roles})
+	for i := range eng.Model.Metrics {
+		m := &eng.Model.Metrics[i]
+		out = append(out, mi{m.Name, m.Description, m.Synonyms, eng.Model.Additivity(m.Name), m.Roles})
 	}
 	writeJSON(w, 200, map[string]any{"metrics": out})
 }
 
 func (v *V1) dimensionsV1(w http.ResponseWriter, r *http.Request) {
-	dims, err := v.Eng.Model.DimensionsFor(r.PathValue("name"))
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	dims, err := eng.Model.DimensionsFor(r.PathValue("name"))
 	if err != nil {
 		writeErr(w, 404, err)
 		return
@@ -118,6 +141,10 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 	p, ok, err := v.principalFrom(r)
 	if !ok {
 		writeErr(w, 401, err)
+		return
+	}
+	eng, _, ok := v.resolve(w, r)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -132,7 +159,7 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := semantic.Query{Metrics: body.Metrics, GroupBy: body.GroupBy, Where: body.Where, TimeGrain: body.Grain, Limit: body.Limit}
-	ans, err := governance.Query(r.Context(), v.Eng, q, p, v.Pol)
+	ans, err := governance.Query(r.Context(), eng, q, p, v.Pol)
 	if err != nil {
 		writeErr(w, 403, err)
 		return
@@ -141,6 +168,14 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 }
 
 func (v *V1) groundV1(w http.ResponseWriter, r *http.Request) {
+	_, gr, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	if gr == nil {
+		writeErr(w, 503, errString("grounding is unavailable for this database"))
+		return
+	}
 	var body struct {
 		Question string `json:"question"`
 	}
@@ -148,7 +183,7 @@ func (v *V1) groundV1(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errString("question is required"))
 		return
 	}
-	q, _, clar, err := v.Gr.Ground(r.Context(), body.Question)
+	q, _, clar, err := gr.Ground(r.Context(), body.Question)
 	if err != nil && clar == nil {
 		writeErr(w, 422, err)
 		return
@@ -166,6 +201,14 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, err)
 		return
 	}
+	eng, gr, ok := v.resolve(w, r)
+	if !ok {
+		return
+	}
+	if gr == nil {
+		writeErr(w, 503, errString("grounding is unavailable for this database"))
+		return
+	}
 	var body struct {
 		Question string `json:"question"`
 	}
@@ -173,7 +216,7 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errString("question is required"))
 		return
 	}
-	q, _, clar, err := v.Gr.Ground(r.Context(), body.Question)
+	q, _, clar, err := gr.Ground(r.Context(), body.Question)
 	if err != nil && clar == nil {
 		writeErr(w, 422, err)
 		return
@@ -182,7 +225,7 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"clarify": clar.Question, "candidates": clar.Candidates})
 		return
 	}
-	ans, err := governance.Query(r.Context(), v.Eng, q, p, v.Pol)
+	ans, err := governance.Query(r.Context(), eng, q, p, v.Pol)
 	if err != nil {
 		writeErr(w, 403, err)
 		return

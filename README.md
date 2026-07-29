@@ -124,6 +124,39 @@ Build order is load-bearing: **meaning first, transport last.**
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design and [`deploy/`](deploy/) for Docker / Compose / Helm.
 
+## Several databases, one process
+
+A semantic model is scoped to one warehouse, so "which model" and "which
+warehouse" are the same question — a database. Declare as many as you have:
+
+```yaml
+databases:
+  - id: conglomerate
+    model: models/conglomerate.yaml
+    dsn: postgres://…/conglomerate
+  - id: shop
+    model: models/shop.yaml
+    dsn: mysql://…/shop
+```
+
+Each gets its own MCP endpoint and is selectable over REST:
+
+```
+MCP   :41910/db/conglomerate          REST  X-DI-Database: conglomerate
+```
+
+Engines open **lazily**: booting costs no connections, and one unreachable
+warehouse fails that database's requests instead of keeping the healthy ones
+offline. An unknown name is an error that lists what is configured, so a typo
+never looks like an outage.
+
+Selection sits with the URL a client connects to, or a header it sets — never a
+tool argument. A model must not be able to wander between a company's databases
+mid-conversation; which database to look at is the product's decision, made once.
+
+The single-database form (top-level `model:` + `warehouse.dsn:`) still works and
+becomes one database named `default`.
+
 ## Warehouses
 
 The backend and the SQL dialect are both chosen from the DSN scheme, together —

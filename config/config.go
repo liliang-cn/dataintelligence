@@ -15,21 +15,40 @@ import (
 
 // Config is the whole service configuration.
 type Config struct {
-	Model      string     `yaml:"model"`      // semantic model YAML path
+	Model      string     `yaml:"model"`      // semantic model YAML path (single-database form)
 	Sources    string     `yaml:"sources"`    // source manifest path (optional)
 	IndexPath  string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
+	Databases  []Database `yaml:"databases"`  // multi-database form; see Defs
 	Warehouse  Warehouse  `yaml:"warehouse"`
 	Auth       Auth       `yaml:"auth"`
 	Governance Governance `yaml:"governance"`
 	Server     Server     `yaml:"server"`
 }
 
+// Database is one governed database: a semantic model over a warehouse.
+//
+//	databases:
+//	  - id: conglomerate
+//	    model: models/conglomerate.yaml
+//	    dsn: postgres://…/conglomerate
+//	  - id: shop
+//	    model: models/shop.yaml
+//	    dsn: mysql://…/shop
+//
+// The id appears in URLs (the MCP endpoint for a database is /db/{id}), so it
+// is restricted to letters, digits, '-' and '_'.
+type Database struct {
+	ID    string `yaml:"id"`
+	Model string `yaml:"model"`
+	DSN   string `yaml:"dsn"`
+}
+
 type Warehouse struct {
 	DSN          string `yaml:"dsn"`
-	AppRole      string `yaml:"app_role"`        // least-priv role for OBO sessions (RLS)
-	MaxScanBytes int64  `yaml:"max_scan_bytes"`  // pre-execution byte ceiling (0 = off)
-	TimeoutSecs  int    `yaml:"timeout_secs"`    // per-query statement timeout
-	MaxRows      int    `yaml:"max_rows"`        // hard row cap
+	AppRole      string `yaml:"app_role"`       // least-priv role for OBO sessions (RLS)
+	MaxScanBytes int64  `yaml:"max_scan_bytes"` // pre-execution byte ceiling (0 = off)
+	TimeoutSecs  int    `yaml:"timeout_secs"`   // per-query statement timeout
+	MaxRows      int    `yaml:"max_rows"`       // hard row cap
 }
 
 type Auth struct {
@@ -64,13 +83,30 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()
-	if c.Model == "" {
-		return nil, fmt.Errorf("config: model is required")
-	}
-	if c.Warehouse.DSN == "" {
-		return nil, fmt.Errorf("config: warehouse.dsn is required")
+	if len(c.Databases) == 0 {
+		if c.Model == "" {
+			return nil, fmt.Errorf("config: model is required (or declare databases:)")
+		}
+		if c.Warehouse.DSN == "" {
+			return nil, fmt.Errorf("config: warehouse.dsn is required (or declare databases:)")
+		}
 	}
 	return &c, nil
+}
+
+// Defs normalises both config shapes into the registry's input.
+//
+// The single-database form (top-level model: + warehouse.dsn:) still works and
+// becomes one database named "default", so existing configs and every
+// `di serve -model … -dsn …` invocation keep behaving exactly as before. When
+// both forms appear, the explicit list wins and the top-level pair is ignored:
+// silently merging them would make the default database depend on which key the
+// reader noticed first.
+func (c *Config) Defs() []Database {
+	if len(c.Databases) > 0 {
+		return c.Databases
+	}
+	return []Database{{ID: "default", Model: c.Model, DSN: c.Warehouse.DSN}}
 }
 
 func (c *Config) applyDefaults() {

@@ -21,12 +21,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sort"
-	"sync"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -218,36 +218,47 @@ func runServe(argv []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	eng, err := engine.New(ctx, cfg.Model, cfg.Warehouse.DSN)
+	defs := make([]engine.Def, 0, len(cfg.Defs()))
+	for _, d := range cfg.Defs() {
+		defs = append(defs, engine.Def{ID: d.ID, Model: d.Model, DSN: d.DSN})
+	}
+	reg, err := engine.NewRegistry(defs...)
 	if err != nil {
 		fail(err)
 	}
-	defer eng.Close()
 
 	idx := cfg.IndexPath
 	if idx == "" {
-		dir, _ := os.MkdirTemp("", "di-serve-")
+		dir, derr := os.MkdirTemp("", "di-serve-")
+		if derr != nil {
+			fail(derr)
+		}
 		defer os.RemoveAll(dir)
-		idx = filepath.Join(dir, "idx.db")
+		idx = dir
 	}
-	gr, err := grounding.New(ctx, eng.Model, idx)
+	dbs := engine.NewDatabases(reg, idx, "models/exemplars.yaml")
+	defer dbs.Close()
+
+	// Open the default database now so a bad DSN or missing model fails at boot
+	// rather than on the first question. The rest stay closed until asked for:
+	// one unreachable warehouse should not keep the other twelve offline.
+	eng, err := reg.Get(ctx, reg.Default())
 	if err != nil {
 		fail(err)
-	}
-	defer gr.Close()
-	if bank, err := grounding.LoadExemplars(ctx, "models/exemplars.yaml"); err == nil {
-		gr.WithExemplars(bank)
 	}
 
 	pol := governance.DefaultPolicy()
 	pol.TenantBudgetBytes = cfg.Governance.TenantBudgetBytes
 	verifier, authNote := verifierFromConfig(cfg)
 
-	fe, _ := newFlowEngine(ctx, cfg.Warehouse.DSN)
+	// Workflows and the operator console run against the default database.
+	// They are engineer-facing surfaces with one connection each; making them
+	// multi-database is a console change, not a wiring one.
+	fe, _ := newFlowEngine(ctx, cfg.Defs()[0].DSN)
 
 	// One parent mux: stable /v1 data-plane API + the existing control-plane API
 	// + the embedded web console at /ui.
-	v1 := &runtime.V1{Eng: eng, Gr: gr, Pol: pol, Verify: verifier}
+	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
 	if console, uerr := ui.New(eng, pol, fe); uerr == nil {
@@ -258,13 +269,19 @@ func runServe(argv []string) {
 	mux.Handle("/", runtime.NewServer(eng, fe))
 
 	rest := &http.Server{Addr: cfg.Server.RESTAddr, Handler: mux}
-	mcpSrv := buildMCPHTTPServer(cfg.Server.MCPAddr, eng, verifier)
+	mcpSrv := buildMCPHTTPServer(cfg.Server.MCPAddr, dbs, verifier)
 
 	errc := make(chan error, 2)
 	go func() { errc <- serveNamed("REST /v1", rest) }()
 	go func() { errc <- serveNamed("MCP", mcpSrv) }()
 	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/ui\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
 		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, "list_metrics/get_dimensions/query_metric", authNote, cfg.Server.OTel)
+	ids := reg.IDs()
+	fmt.Fprintf(os.Stderr, "  databases (%d, default %q):\n", len(ids), reg.Default())
+	for _, id := range ids {
+		fmt.Fprintf(os.Stderr, "    %-20s MCP %s%s   REST  X-DI-Database: %s\n",
+			id, cfg.Server.MCPAddr, engine.MountPath(id), id)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -287,9 +304,29 @@ func serveNamed(name string, s *http.Server) error {
 
 // buildMCPHTTPServer wires the MCP server over streamable HTTP behind bearer auth
 // (or open when verifier is nil) and continues inbound W3C traces.
-func buildMCPHTTPServer(addr string, eng *engine.Engine, verifier auth.TokenVerifier) *http.Server {
-	opts := &mcpserver.Options{Default: mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}}, Burst: 5, ChecksPath: envOr("DI_CHECKS", "examples/meridian/conflicts.yaml")}
-	handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return mcpserver.NewServer(eng, opts) }, nil)
+// buildMCPHTTPServer serves every configured database from one listener:
+// / is the default, /db/{id} is that database. The endpoint a client connects
+// to decides which data it sees, so database selection sits with the product
+// that owns the connection and is not reachable as a tool argument the model
+// could set — a model must not be able to wander between a company's databases
+// mid-conversation.
+func buildMCPHTTPServer(addr string, dbs *engine.Databases, verifier auth.TokenVerifier) *http.Server {
+	checks := envOr("DI_CHECKS", "examples/meridian/conflicts.yaml")
+	handler := mcpsdk.NewStreamableHTTPHandler(func(r *http.Request) *mcpsdk.Server {
+		eng, gr, err := dbs.Resolve(r.Context(), engine.DatabaseFromRequest(r))
+		if err != nil {
+			// The SDK has nowhere to report a factory error, so serve a server
+			// whose every tool says which database was asked for and failed.
+			return mcpserver.NewUnavailableServer(err)
+		}
+		opts := &mcpserver.Options{
+			Default:    mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}},
+			Burst:      5,
+			ChecksPath: checks,
+			Grounder:   gr,
+		}
+		return mcpserver.NewServer(eng, opts)
+	}, nil)
 	var h http.Handler = handler
 	if verifier != nil {
 		h = auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{Scopes: []string{"metrics:read"}})(handler)
@@ -1561,7 +1598,7 @@ func runIngestStatus(argv []string) {
 					diags = append(diags, map[string]any{
 						"level": "warn", "source": "cdc",
 						"message": fmt.Sprintf("活库检测到 %d 笔新交易未同步(水位停在 %d),点『立即同步』增量入仓。", pending, wmCur),
-						"action": "sync", "action_label": "立即同步",
+						"action":  "sync", "action_label": "立即同步",
 					})
 				}
 			}

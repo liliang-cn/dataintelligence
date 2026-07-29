@@ -30,3 +30,23 @@ server:
   rest_addr: ":41900"
   mcp_addr: ":41910"
   otel: true
+
+# --- Several governed databases from one process ---------------------------
+# A semantic model is scoped to one warehouse, so "which model" and "which
+# warehouse" are the same question. Declare as many as you have; the first is
+# the default. Each gets an MCP endpoint at /db/{id} and is selectable over
+# REST with the X-DI-Database header.
+#
+# Engines open lazily: booting costs no connections, and one unreachable
+# warehouse fails only its own requests.
+#
+# databases:
+#   - id: conglomerate
+#     model: models/conglomerate.yaml
+#     dsn: postgres://user:pass@host:5432/conglomerate?sslmode=disable
+#   - id: shop
+#     model: models/shop.yaml
+#     dsn: mysql://user:pass@host:3306/shop
+#   - id: export
+#     model: models/export.yaml
+#     dsn: sqlite:///data/export.db

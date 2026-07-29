@@ -254,3 +254,23 @@ func renderTable(cols []string, rows [][]any) string {
 	}
 	return b.String()
 }
+
+// NewUnavailableServer stands in for a database that could not be opened.
+//
+// The streamable-HTTP handler builds a server per request and has no way to
+// return an error, so the alternative to this is a panic or a silently empty
+// tool list — both of which look, to a caller, like "this database has no
+// metrics". Every tool here fails with the actual reason instead.
+func NewUnavailableServer(cause error) *mcpsdk.Server {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{
+		Name: "dataintelligence", Title: "DataIntelligence (unavailable)", Version: "0.1.0",
+	}, nil)
+	fail := func(context.Context, *mcpsdk.CallToolRequest, struct{}) (*mcpsdk.CallToolResult, any, error) {
+		return errResult(cause.Error()), nil, nil
+	}
+	for _, name := range []string{"list_metrics", "get_dimensions", "query_metric"} {
+		mcpsdk.AddTool(server, &mcpsdk.Tool{Name: name,
+			Description: "Unavailable: " + cause.Error()}, fail)
+	}
+	return server
+}

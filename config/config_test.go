@@ -48,3 +48,28 @@ func TestLoadRequiresModelAndDSN(t *testing.T) {
 		t.Fatal("expected error when model/dsn missing")
 	}
 }
+
+// The single-database form must keep working untouched: every existing config
+// file and every `di serve -model … -dsn …` depends on it.
+func TestDefsNormalisesBothConfigShapes(t *testing.T) {
+	single := &Config{Model: "m.yaml", Warehouse: Warehouse{DSN: "postgres://x"}}
+	got := single.Defs()
+	if len(got) != 1 || got[0].ID != "default" || got[0].Model != "m.yaml" || got[0].DSN != "postgres://x" {
+		t.Errorf("single-database form = %+v", got)
+	}
+
+	// With an explicit list the top-level pair is ignored rather than merged:
+	// merging would make which database is default depend on key order.
+	multi := &Config{
+		Model:     "ignored.yaml",
+		Warehouse: Warehouse{DSN: "postgres://ignored"},
+		Databases: []Database{
+			{ID: "shop", Model: "shop.yaml", DSN: "mysql://shop"},
+			{ID: "wh", Model: "wh.yaml", DSN: "postgres://wh"},
+		},
+	}
+	got = multi.Defs()
+	if len(got) != 2 || got[0].ID != "shop" || got[1].ID != "wh" {
+		t.Errorf("multi-database form = %+v", got)
+	}
+}

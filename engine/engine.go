@@ -59,9 +59,7 @@ func dialectFor(driver string) semantic.Dialect {
 	}
 }
 
-
 func (e *Engine) Close() error { return e.WH.Close() }
-
 
 // envBytes reads a byte budget from the environment (plain integer bytes),
 // returning 0 (disabled) when unset or unparseable.
