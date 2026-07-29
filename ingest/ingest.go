@@ -144,7 +144,6 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, batch connectors.Batch, p
 		required[r] = true
 	}
 
-	// Build a single multi-row INSERT.
 	var targetCols []string
 	for _, fm := range plan.Fields {
 		targetCols = append(targetCols, quote(fm.Target))
@@ -152,6 +151,32 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, batch connectors.Batch, p
 	for _, t := range plan.Tags {
 		targetCols = append(targetCols, quote(t.Col))
 	}
+	colList := strings.Join(targetCols, ", ")
+
+	// Postgres' extended protocol caps one statement at 65535 bind parameters, so
+	// a single multi-row INSERT overflows on large files. Chunk rows into batches
+	// sized to stay under that limit (params per row = mapped columns + tags).
+	colsPerRow := len(plan.Fields) + len(plan.Tags)
+	const maxParams = 60000 // headroom under the 65535 hard limit
+	batchRows := maxParams / colsPerRow
+	if batchRows < 1 {
+		batchRows = 1
+	}
+
+	flush := func(valuesSQL []string, args []any) error {
+		if len(valuesSQL) == 0 {
+			return nil
+		}
+		insert := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+			quote(plan.Table), colList, strings.Join(valuesSQL, ", "))
+		n, err := wh.Exec(ctx, insert, args...)
+		if err != nil {
+			return err
+		}
+		rep.RowsLanded += int(n)
+		return nil
+	}
+
 	var valuesSQL []string
 	var args []any
 	ph := 1
@@ -169,7 +194,7 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, batch connectors.Batch, p
 		if skip {
 			continue
 		}
-		group := make([]string, 0, len(plan.Fields)+len(plan.Tags))
+		group := make([]string, 0, colsPerRow)
 		for _, fm := range plan.Fields {
 			group = append(group, fmt.Sprintf("$%d", ph))
 			ph++
@@ -181,17 +206,18 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, batch connectors.Batch, p
 			args = append(args, t.Val)
 		}
 		valuesSQL = append(valuesSQL, "("+strings.Join(group, ", ")+")")
+
+		// Flush the batch before it would exceed the parameter limit.
+		if len(valuesSQL) >= batchRows {
+			if err := flush(valuesSQL, args); err != nil {
+				return rep, err
+			}
+			valuesSQL, args, ph = nil, nil, 1
+		}
 	}
-	if len(valuesSQL) == 0 {
-		return rep, nil
-	}
-	insert := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
-		quote(plan.Table), strings.Join(targetCols, ", "), strings.Join(valuesSQL, ", "))
-	n, err := wh.Exec(ctx, insert, args...)
-	if err != nil {
+	if err := flush(valuesSQL, args); err != nil {
 		return rep, err
 	}
-	rep.RowsLanded = int(n)
 	return rep, nil
 }
 
