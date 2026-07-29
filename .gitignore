@@ -11,3 +11,6 @@ deploy/crm/twenty.env.upstream
 # local tooling artifacts
 .playwright-mcp/
 di-query-finance.png
+
+# macOS Finder metadata
+.DS_Store
