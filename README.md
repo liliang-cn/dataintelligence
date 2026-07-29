@@ -114,7 +114,7 @@ Build order is load-bearing: **meaning first, transport last.**
 | Onboarding | introspect a warehouse → generate a model draft | `di model gen` |
 | Query | governed semantic query → fan-out-safe SQL | `di query`, `POST /v1/query` |
 | NL | ground a question, optionally answer | `di ask`, `POST /v1/ground` `/v1/ask` |
-| Dialects | same model → Postgres / Snowflake / Databricks SQL | `di explain -dialect` |
+| Dialects | same model → Postgres / MySQL / SQLite / SQL Server / Snowflake / Databricks SQL | `di explain -dialect` |
 | Governance | RBAC, masking, RLS, k-anon, threat-model-as-code | `di threats` |
 | Identity | real OIDC/JWT + on-behalf-of to the warehouse | `di obo`, `di pentest` |
 | Evaluation | accuracy gate vs control SQL + LLM judge | `di nleval` |
@@ -123,6 +123,57 @@ Build order is load-bearing: **meaning first, transport last.**
 | Service | config-driven daemon, REST /v1 + MCP | `di serve` |
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design and [`deploy/`](deploy/) for Docker / Compose / Helm.
+
+## Warehouses
+
+The backend and the SQL dialect are both chosen from the DSN scheme, together —
+compiling Postgres SQL for MySQL is how "revenue by month" becomes a syntax
+error, or worse, a number bucketed the wrong way.
+
+| DSN | Engine | Governance that does **not** apply |
+|---|---|---|
+| `postgres://` | PostgreSQL | — full support, including RLS and on-behalf-of |
+| `mysql://` `mariadb://` | MySQL 8 / MariaDB | no row-level security (the engine has none) |
+| `sqlite://` | SQLite file | no row-level security |
+| `sqlserver://` `mssql://` | SQL Server 2017+ | RLS not wired up (needs SESSION_CONTEXT, not GUCs); no read-only transaction flag |
+| `duckdb:` | DuckDB | build with `-tags duckdb`; no cost pre-flight |
+
+Where a control cannot be enforced, DI **refuses to start** rather than accept a
+setting that appears to apply. Point `DI_DB_APP_ROLE` at MySQL and you get an
+error naming the reason, not a silently ungoverned connection. The semantic
+layer's own governance — metric RBAC, column masking, k-anonymity — is enforced
+in Go and applies on every engine.
+
+Two differences worth knowing because they are not visible in a result set:
+
+- **MySQL has no `DATE_TRUNC`** in any version. Grains are emulated with date
+  arithmetic that returns a DATE, and weeks start Monday to match Postgres
+  rather than following MySQL's Sunday-default `WEEK()`.
+- **SQLite has no date type.** A timestamp column is declared `TEXT`, so
+  `di model gen` samples the actual values to decide whether a column is a time
+  dimension. A column named `order_date` holding `"Q3"` stays categorical.
+
+## Scope: an engine, not an end-user product
+
+DataIntelligence is the **governance engine and data plane**. Its own surfaces are
+built for the people who run it:
+
+- `di ask` / `chat` / `agent` / `copilot` — **CLI**, for trying a model, debugging
+  grounding, and scripting. Not a product chat window.
+- `di serve`'s `/ui` — an **operator console**: model, eval runs, traces,
+  write-back approvals, rollout. Not a business-user dashboard.
+- `/v1` + MCP — the **integration surface**. This is how products consume it.
+
+Anything user-facing — an executive chat UI, onboarding wizards, desktop
+packaging, dashboards — belongs in a product **on top of** DI, talking to `/v1`
+or MCP. One such product is
+[`di-server`](https://github.com/liliang-cn/di-server),
+which uses DI for governed metrics and adds what DI deliberately does not do:
+direct (unmodeled) SQL exploration, pre-ingestion branch diffing, and an
+executive-facing UI.
+
+**DI does not ship an end-user product.** Keeping that line means the engine stays
+domain-neutral and embeddable, instead of growing a second, weaker BI tool inside it.
 
 ## Status
 

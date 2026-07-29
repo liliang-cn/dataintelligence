@@ -13,6 +13,11 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
 )
 
+const (
+	defaultTimeout = 30 * time.Second
+	defaultMaxRows = 10000
+)
+
 type Options struct {
 	Timeout      time.Duration // per-query statement timeout (default 30s)
 	MaxRows      int           // hard row cap (default 10000) — guardrail the agent can't override
@@ -23,7 +28,7 @@ type Options struct {
 type Warehouse struct {
 	db     *sql.DB
 	opts   Options
-	driver string // "pgx" (Postgres) | "duckdb"
+	driver string // "pgx" (Postgres) | "duckdb" | "mysql" | "sqlite" | "sqlserver"
 }
 
 type Result struct {
@@ -45,15 +50,20 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Warehouse, er
 		return nil, fmt.Errorf("ping warehouse: %w", err)
 	}
 	if opts.Timeout <= 0 {
-		opts.Timeout = 30 * time.Second
+		opts.Timeout = defaultTimeout
 	}
 	if opts.MaxRows <= 0 {
-		opts.MaxRows = 10000
+		opts.MaxRows = defaultMaxRows
 	}
 	return &Warehouse{db: db, opts: opts, driver: "pgx"}, nil
 }
 
 func (w *Warehouse) Close() error { return w.db.Close() }
+
+// Driver names the backend: "pgx" | "duckdb" | "mysql". Callers that must write
+// engine-specific SQL — schema introspection, chiefly — branch on this rather
+// than guessing from the DSN they no longer hold.
+func (w *Warehouse) Driver() string { return w.driver }
 
 // MaxScanBytes exposes the configured byte ceiling (0 = disabled).
 func (w *Warehouse) MaxScanBytes() int64 { return w.opts.MaxScanBytes }
@@ -62,8 +72,12 @@ func (w *Warehouse) MaxScanBytes() int64 { return w.opts.MaxScanBytes }
 // size of a query: rows × per-row width. It runs nothing against the data, so
 // it is safe to call as a pre-flight cost check.
 func (w *Warehouse) Estimate(ctx context.Context, query string, args ...any) (rows int64, bytes int64, err error) {
-	if w.driver == "duckdb" {
-		return 0, 0, nil // DuckDB's EXPLAIN format differs; skip the byte-ceiling pre-flight
+	if w.driver != "pgx" {
+		// DuckDB and MySQL both spell EXPLAIN differently and neither reports a
+		// per-row width, so there is no byte estimate to compare a ceiling
+		// against. Skipping is honest; inventing a number would not be. The
+		// timeout and row cap still apply during and after execution.
+		return 0, 0, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
 	defer cancel()
@@ -164,16 +178,37 @@ type Session struct {
 // scoping is enforced by the engine — belt-and-suspenders under the app layer.
 // The settings are transaction-local (set_config(..., true)), so they reset when
 // the tx ends and never leak across pooled connections.
+//
+// On engines with no row-level security (MySQL, DuckDB) there is nothing for the
+// identity to reach: the query still runs read-only under the timeout and row
+// cap, but the caller only gets the governance the semantic layer enforces in
+// Go. OpenMySQL refuses an AppRole up front so this difference is a startup
+// error rather than a security control that appears to be on and is not.
 func (w *Warehouse) QueryAs(ctx context.Context, s Session, query string, args ...any) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, w.opts.Timeout)
 	defer cancel()
 
 	start := time.Now()
-	tx, err := w.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	// T-SQL has no read-only transaction flag, and go-mssqldb rejects the option
+	// outright rather than ignoring it. The read-only property does not rest on
+	// this in either case: the only SQL that reaches here is compiled by the
+	// semantic layer, which emits SELECT and nothing else, and deployments are
+	// expected to connect with a least-privilege login. The flag is defence in
+	// depth where the engine offers it.
+	tx, err := w.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: w.driver != "sqlserver"})
 	if err != nil {
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // read-only; rollback also resets GUCs
+
+	if w.driver != "pgx" {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query: %w", err)
+		}
+		defer rows.Close()
+		return w.scan(rows, query, start)
+	}
 
 	// Drop to a least-privilege role so RLS actually applies — a superuser (the
 	// default local role) bypasses row security entirely. Transaction-local.
@@ -220,6 +255,16 @@ func (w *Warehouse) scan(rows *sql.Rows, query string, start time.Time) (*Result
 		return nil, err
 	}
 	res := &Result{Columns: cols, SQL: query}
+	// MySQL and SQL Server return DECIMAL — and therefore every SUM/AVG — as
+	// []byte, which would marshal to JSON as base64. Decode per column type.
+	var decode []func(any) any
+	if w.driver == "mysql" || w.driver == "sqlserver" {
+		types, err := rows.ColumnTypes()
+		if err != nil {
+			return nil, err
+		}
+		decode = byteDecoder(types)
+	}
 	for rows.Next() {
 		if len(res.Rows) >= w.opts.MaxRows {
 			res.Truncated = true
@@ -232,6 +277,9 @@ func (w *Warehouse) scan(rows *sql.Rows, query string, start time.Time) (*Result
 		}
 		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
+		}
+		for i, f := range decode {
+			holders[i] = f(holders[i])
 		}
 		res.Rows = append(res.Rows, holders)
 	}

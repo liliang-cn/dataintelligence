@@ -163,15 +163,22 @@ const (
 	kindNumeric
 )
 
+// kindOf classifies an information_schema data_type. It has to span engines:
+// Postgres says "timestamp without time zone" / "character varying" / "numeric",
+// MySQL says "datetime" / "varchar" / "decimal". A type that falls through is
+// left out of the draft model entirely, so a missed spelling silently costs a
+// dimension or a metric.
 func kindOf(dataType string) colKind {
 	t := strings.ToLower(dataType)
 	switch {
-	case strings.Contains(t, "timestamp"), t == "date", strings.HasPrefix(t, "time"):
+	case strings.Contains(t, "timestamp"), strings.Contains(t, "datetime"),
+		t == "date", strings.HasPrefix(t, "time"):
 		return kindTime
-	case strings.Contains(t, "char"), t == "text", t == "boolean", t == "uuid":
+	case strings.Contains(t, "char"), strings.Contains(t, "text"),
+		strings.HasPrefix(t, "bool"), t == "uuid", strings.HasPrefix(t, "enum"):
 		return kindText
 	case strings.Contains(t, "int"), strings.Contains(t, "numeric"), strings.Contains(t, "decimal"),
-		t == "real", strings.Contains(t, "double"), t == "money":
+		t == "real", strings.Contains(t, "float"), strings.Contains(t, "double"), t == "money":
 		return kindNumeric
 	default:
 		return kindOther

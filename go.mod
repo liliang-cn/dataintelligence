@@ -8,7 +8,7 @@ require (
 	github.com/liliang-cn/agent-go/v2 v2.101.1
 	github.com/liliang-cn/cortexdb/v2 v2.51.0
 	github.com/liliang-cn/eval-go v0.4.0
-	github.com/liliang-cn/semantic-go v0.1.5
+	github.com/liliang-cn/semantic-go v0.1.6
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/minio/minio-go/v7 v7.2.0
@@ -22,6 +22,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.38.2
 )
 
 require (
@@ -170,5 +171,4 @@ require (
 	modernc.org/libc v1.66.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.38.2 // indirect
 )

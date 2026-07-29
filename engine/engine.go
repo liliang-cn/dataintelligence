@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/liliang-cn/dataintelligence/obs"
@@ -34,37 +33,35 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 		AppRole:      os.Getenv("DI_DB_APP_ROLE"),
 		MaxScanBytes: envBytes("DI_MAX_SCAN_BYTES"), // 0 = disabled
 	}
-	// A "duckdb:" DSN selects the DuckDB backend + dialect (opt-in build:
-	// -tags duckdb; otherwise OpenDuckDB returns a clear "rebuild" error).
-	if path, ok := duckDBPath(dsn); ok {
-		wh, err := warehouse.OpenDuckDB(ctx, path, opts)
-		if err != nil {
-			return nil, err
-		}
-		return &Engine{Model: m, WH: wh, Dialect: semantic.DuckDB{}}, nil
-	}
-	wh, err := warehouse.OpenPostgres(ctx, dsn, opts)
+	wh, err := warehouse.Open(ctx, dsn, opts)
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{Model: m, WH: wh, Dialect: semantic.Postgres{}}, nil
+	return &Engine{Model: m, WH: wh, Dialect: dialectFor(wh.Driver())}, nil
 }
+
+// dialectFor pairs an open warehouse with the SQL shape it understands. The
+// dialect must follow the backend, not a separate setting: compiling Postgres
+// SQL for MySQL is how "revenue by month" becomes a syntax error (there is no
+// DATE_TRUNC) or, worse, a number bucketed the wrong way.
+func dialectFor(driver string) semantic.Dialect {
+	switch driver {
+	case "mysql":
+		return semantic.MySQL{}
+	case "sqlite":
+		return semantic.SQLite{}
+	case "sqlserver":
+		return semantic.SQLServer{}
+	case "duckdb":
+		return semantic.DuckDB{}
+	default:
+		return semantic.Postgres{}
+	}
+}
+
 
 func (e *Engine) Close() error { return e.WH.Close() }
 
-// duckDBPath recognizes a "duckdb:" DSN and returns the file path (":memory:"
-// when empty). e.g. "duckdb:/data/wh.duckdb" or "duckdb::memory:".
-func duckDBPath(dsn string) (string, bool) {
-	const p = "duckdb:"
-	if !strings.HasPrefix(dsn, p) {
-		return "", false
-	}
-	path := strings.TrimPrefix(dsn, p)
-	if path == "" {
-		path = ":memory:"
-	}
-	return path, true
-}
 
 // envBytes reads a byte budget from the environment (plain integer bytes),
 // returning 0 (disabled) when unset or unparseable.

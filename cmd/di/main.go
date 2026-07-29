@@ -10,12 +10,19 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"sort"
+	"sync"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -147,6 +154,9 @@ func rootCmd() *cobra.Command {
 		leaf("crm", "data", "Sync from a CRM source", runCRM),
 		leaf("webhook", "data", "Run the webhook receiver", runWebhook),
 		leaf("cdc", "data", "Watch a table for changes (CDC)", runCDC),
+		leaf("sync", "data", "Incrementally sync a live source table into the warehouse (watermark CDC)", runSync),
+		leaf("webhook-ingest", "data", "Receive order webhooks (push) and land them into the governed warehouse", runWebhookIngest),
+		leaf("ingest-status", "data", "Serve a JSON ingestion-status endpoint (warehouse totals, per-source, watermarks)", runIngestStatus),
 		leaf("propose", "data", "Propose a typed write-back change", runPropose),
 		leaf("proposals", "data", "List write-back proposals", runProposals),
 		leaf("approve", "data", "Approve a write-back proposal", func(a []string) { runWriteDecision("approve", a) }),
@@ -320,12 +330,12 @@ func orDefaultStr(s, def string) string {
 }
 
 // runExplain compiles a semantic query to SQL for a chosen warehouse dialect
-// WITHOUT executing it (M6): the same intent → Postgres / Snowflake / Databricks
-// SQL, proving the dialect abstraction. No warehouse connection needed.
+// WITHOUT executing it (M6): the same intent → Postgres / MySQL / Snowflake /
+// Databricks SQL, proving the dialect abstraction. No warehouse connection needed.
 func runExplain(argv []string) {
 	fs := flag.NewFlagSet("explain", flag.ExitOnError)
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
-	dialect := fs.String("dialect", "postgres", "postgres | snowflake | databricks | ansi")
+	dialect := fs.String("dialect", "postgres", "postgres | mysql | sqlite | sqlserver | snowflake | databricks | duckdb | ansi")
 	metrics := fs.String("metrics", "", "comma-separated metrics (required)")
 	by := fs.String("by", "", "group-by dimensions")
 	grain := fs.String("grain", "", "time grain (day|month|quarter|year)")
@@ -335,7 +345,7 @@ func runExplain(argv []string) {
 	}
 	d, ok := semantic.DialectByName(*dialect)
 	if !ok {
-		fail(fmt.Errorf("unknown dialect %q (postgres|snowflake|databricks|ansi)", *dialect))
+		fail(fmt.Errorf("unknown dialect %q (postgres|mysql|sqlite|sqlserver|snowflake|databricks|duckdb|ansi)", *dialect))
 	}
 	m, err := semantic.LoadFile(*model)
 	if err != nil {
@@ -437,7 +447,7 @@ func runModelGen(argv []string) {
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -527,7 +537,7 @@ func runReconcile(argv []string) {
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -591,7 +601,7 @@ func runSpend(argv []string) {
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -806,7 +816,7 @@ func runRollout(argv []string) {
 	_ = fs.Parse(rest)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -1270,7 +1280,7 @@ func runCDC(argv []string) {
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -1293,6 +1303,415 @@ func runCDC(argv []string) {
 		fmt.Printf("  [%s cursor=%d] %v\n", e.Op, e.Cursor, e.Record)
 	}
 	fmt.Printf("captured %d change event(s)\n", n)
+}
+
+func toI64(v any) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	case float64:
+		return int64(x)
+	case []byte:
+		n, _ := strconv.ParseInt(string(x), 10, 64)
+		return n
+	case string:
+		n, _ := strconv.ParseInt(x, 10, 64)
+		return n
+	}
+	return 0
+}
+
+// runSync incrementally lands new rows from a LIVE source table into the
+// governed warehouse (Tier-2 CDC). Watermark = a monotonic cursor column; it
+// resumes from a persisted `_sync_state` (or the governed table's current max),
+// pulls only rows past the watermark, lands them into a staging table, runs an
+// optional transform (stage → governed, typically an upsert), and advances the
+// watermark. `-for` keeps polling on an interval to simulate streaming.
+func runSync(argv []string) {
+	fs := flag.NewFlagSet("sync", flag.ExitOnError)
+	srcDSN := fs.String("source", "", "live source DSN (required)")
+	table := fs.String("table", "", "source table to sync (required)")
+	cursor := fs.String("cursor", "id", "monotonic cursor column (e.g. sale_id)")
+	destDSN := fs.String("dest", envOr("DI_DSN", defaultDSN), "governed warehouse DSN")
+	stage := fs.String("stage", "", "dest staging table for the delta (default stg_<table>_cdc)")
+	destTable := fs.String("dest-table", "", "governed table to seed the initial watermark from (default = -table)")
+	required := fs.String("required", "", "comma-separated stage columns that must be non-empty")
+	after := fs.String("after", "", "SQL file run on dest after landing the delta (transform stage → governed)")
+	stateTable := fs.String("state", "_sync_state", "state table persisting the per-source watermark")
+	forSecs := fs.Int("for", 0, "if >0, keep syncing every -every seconds for this many seconds; else one-shot")
+	every := fs.Int("every", 5, "poll interval seconds when -for > 0")
+	_ = fs.Parse(argv)
+	if *srcDSN == "" || *table == "" {
+		fmt.Fprintln(os.Stderr, "di sync: -source and -table are required")
+		os.Exit(2)
+	}
+	if *stage == "" {
+		*stage = "stg_" + *table + "_cdc"
+	}
+	if *destTable == "" {
+		*destTable = *table
+	}
+
+	ctx := context.Background()
+	src, err := warehouse.Open(ctx, *srcDSN, warehouse.Options{MaxRows: 1000000})
+	if err != nil {
+		fail(err)
+	}
+	defer src.Close()
+	dest, err := warehouse.Open(ctx, *destDSN, warehouse.Options{MaxRows: 1000000})
+	if err != nil {
+		fail(err)
+	}
+	defer dest.Close()
+
+	if _, err := dest.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS %q (src_table text PRIMARY KEY, cursor bigint NOT NULL)`, *stateTable)); err != nil {
+		fail(err)
+	}
+	ensureIngestLog(ctx, dest)
+
+	// Stable, ordered source schema so the stage columns are identical every run.
+	scRes, err := src.Query(ctx,
+		`SELECT column_name FROM information_schema.columns WHERE table_name=$1 ORDER BY ordinal_position`, *table)
+	if err != nil {
+		fail(err)
+	}
+	schema := connectors.SourceSchema{Name: *table}
+	for _, r := range scRes.Rows {
+		schema.Fields = append(schema.Fields, connectors.Field{Name: fmt.Sprintf("%v", r[0]), Type: "text"})
+	}
+	if len(schema.Fields) == 0 {
+		fail(fmt.Errorf("source table %q not found or has no columns", *table))
+	}
+
+	afterSQL := ""
+	if *after != "" {
+		b, err := os.ReadFile(*after)
+		if err != nil {
+			fail(err)
+		}
+		afterSQL = string(b)
+	}
+
+	syncOnce := func() (int, int64) {
+		last := int64(0)
+		if r, err := dest.Query(ctx, fmt.Sprintf(`SELECT cursor FROM %q WHERE src_table=$1`, *stateTable), *table); err == nil && len(r.Rows) > 0 {
+			last = toI64(r.Rows[0][0])
+		} else if r, err := dest.Query(ctx, fmt.Sprintf(`SELECT COALESCE(MAX(%q),0) FROM %q`, *cursor, *destTable)); err == nil && len(r.Rows) > 0 {
+			last = toI64(r.Rows[0][0])
+		}
+		cdc := &connectors.PostgresCDC{WH: src, Table: *table, CursorCol: *cursor, Interval: time.Second}
+		cdc.SetCursor(last)
+		var rows []connectors.Record
+		maxCur := last
+		for {
+			events, err := cdc.Poll(ctx)
+			if err != nil {
+				fail(err)
+			}
+			if len(events) == 0 {
+				break
+			}
+			for _, e := range events {
+				rows = append(rows, e.Record)
+				if e.Cursor > maxCur {
+					maxCur = e.Cursor
+				}
+			}
+		}
+		if len(rows) == 0 {
+			return 0, last
+		}
+		if _, err := dest.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %q`, *stage)); err != nil {
+			fail(err)
+		}
+		plan := ingest.InferMapping(schema, *stage, nil)
+		plan.Required = split(*required)
+		rep, err := ingest.Run(ctx, dest, connectors.Batch{Schema: schema, Rows: rows}, plan)
+		if err != nil {
+			fail(err)
+		}
+		if afterSQL != "" {
+			if _, err := dest.Exec(ctx, afterSQL); err != nil {
+				fail(err)
+			}
+		}
+		if _, err := dest.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO %q (src_table, cursor) VALUES ($1,$2) ON CONFLICT (src_table) DO UPDATE SET cursor=EXCLUDED.cursor`,
+			*stateTable), *table, maxCur); err != nil {
+			fail(err)
+		}
+		logIngest(ctx, dest, "cdc", "活库增量:"+*table, int64(rep.RowsLanded), maxCur)
+		return rep.RowsLanded, maxCur
+	}
+
+	if *forSecs <= 0 {
+		n, wm := syncOnce()
+		fmt.Printf("synced %d new row(s) from %q → dest; watermark %s=%d\n", n, *table, *cursor, wm)
+		return
+	}
+	deadline := time.Now().Add(time.Duration(*forSecs) * time.Second)
+	total := 0
+	for time.Now().Before(deadline) {
+		n, wm := syncOnce()
+		total += n
+		fmt.Printf("[sync] +%d row(s), watermark=%d\n", n, wm)
+		time.Sleep(time.Duration(*every) * time.Second)
+	}
+	fmt.Printf("done: %d row(s) synced over %ds\n", total, *forSecs)
+}
+
+// ensureIngestLog creates the ingestion audit/provenance table if absent. Every
+// tier (file / CDC / webhook) appends one row per landing so a UI can show what
+// came in from where and when.
+func ensureIngestLog(ctx context.Context, wh *warehouse.Warehouse) {
+	_, _ = wh.Exec(ctx, `CREATE TABLE IF NOT EXISTS _ingest_log (
+		id bigserial PRIMARY KEY, source_type text, note text, rows bigint, watermark bigint,
+		ts timestamptz DEFAULT now())`)
+}
+
+func logIngest(ctx context.Context, wh *warehouse.Warehouse, srcType, note string, rows, watermark int64) {
+	_, _ = wh.Exec(ctx, `INSERT INTO _ingest_log (source_type, note, rows, watermark) VALUES ($1,$2,$3,$4)`,
+		srcType, note, rows, watermark)
+}
+
+// runIngestStatus serves a small JSON status endpoint (with CORS) so a browser
+// panel can visualize the ingestion pipeline: warehouse totals, per-source landed
+// counts, watermarks, and a recent-activity timeline. Read-only.
+func runIngestStatus(argv []string) {
+	fs := flag.NewFlagSet("ingest-status", flag.ExitOnError)
+	destDSN := fs.String("dest", envOr("DI_DSN", defaultDSN), "governed warehouse DSN")
+	addr := fs.String("addr", ":34300", "listen address")
+	factTable := fs.String("fact", "sales", "fact table for totals")
+	amountCol := fs.String("amount", "amount", "revenue column on the fact table")
+	cdcSrc := fs.String("cdc-source", "", "live source DSN — enables the 'pending rows not yet synced' diagnostic")
+	cdcTable := fs.String("cdc-table", "sales", "source table for pending detection")
+	cdcCursor := fs.String("cdc-cursor", "sale_id", "source cursor column")
+	actSync := fs.String("action-sync", "", "shell command run by POST /action/sync (e.g. a `di sync ...`)")
+	actTest := fs.String("action-test", "", "shell command run by POST /action/test (e.g. inject a test row into the source)")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	wh, err := warehouse.Open(ctx, *destDSN, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+	ensureIngestLog(ctx, wh)
+
+	var src *warehouse.Warehouse
+	if *cdcSrc != "" {
+		if src, err = warehouse.Open(ctx, *cdcSrc, warehouse.Options{}); err != nil {
+			fmt.Fprintf(os.Stderr, "cdc-source open failed (pending diagnostic disabled): %v\n", err)
+		} else {
+			defer src.Close()
+		}
+	}
+
+	q1 := func(sql string, args ...any) [][]any {
+		r, err := wh.Query(ctx, sql, args...)
+		if err != nil {
+			return nil
+		}
+		return r.Rows
+	}
+	status := func() map[string]any {
+		out := map[string]any{}
+		if rows := q1(fmt.Sprintf(`SELECT count(*), COALESCE(round(SUM(%q)),0) FROM %q`, *amountCol, *factTable)); len(rows) > 0 {
+			out["fact_rows"] = toI64(rows[0][0])
+			out["revenue"] = toI64(rows[0][1])
+		}
+		var bySource []map[string]any
+		for _, r := range q1(`SELECT source_type, COALESCE(SUM(rows),0), count(*), max(ts), EXTRACT(EPOCH FROM now()-max(ts))::bigint FROM _ingest_log GROUP BY source_type ORDER BY max(ts) DESC`) {
+			bySource = append(bySource, map[string]any{
+				"source_type": fmt.Sprintf("%v", r[0]), "rows": toI64(r[1]),
+				"events": toI64(r[2]), "last_ts": fmt.Sprintf("%v", r[3]), "age": toI64(r[4]),
+			})
+		}
+		out["by_source"] = bySource
+		var wm []map[string]any
+		for _, r := range q1(`SELECT src_table, cursor FROM _sync_state ORDER BY src_table`) {
+			wm = append(wm, map[string]any{"src_table": fmt.Sprintf("%v", r[0]), "cursor": toI64(r[1])})
+		}
+		out["watermarks"] = wm
+		var recent []map[string]any
+		for _, r := range q1(`SELECT source_type, note, rows, ts, EXTRACT(EPOCH FROM now()-ts)::bigint FROM _ingest_log ORDER BY ts DESC LIMIT 12`) {
+			recent = append(recent, map[string]any{
+				"source_type": fmt.Sprintf("%v", r[0]), "note": fmt.Sprintf("%v", r[1]),
+				"rows": toI64(r[2]), "ts": fmt.Sprintf("%v", r[3]), "age": toI64(r[4]),
+			})
+		}
+		out["recent"] = recent
+
+		// Diagnostics: real signal — live source ahead of the CDC watermark means
+		// there are new rows waiting to be synced into the governed warehouse.
+		var diags []map[string]any
+		if src != nil {
+			var wmCur int64
+			if r := q1(`SELECT cursor FROM _sync_state WHERE src_table=$1`, *cdcTable); len(r) > 0 {
+				wmCur = toI64(r[0][0])
+			} else if r := q1(fmt.Sprintf(`SELECT COALESCE(MAX(%q),0) FROM %q`, *cdcCursor, *factTable)); len(r) > 0 {
+				wmCur = toI64(r[0][0])
+			}
+			if sr, err := src.Query(ctx, fmt.Sprintf(`SELECT COALESCE(MAX(%q),0) FROM %q`, *cdcCursor, *cdcTable)); err == nil && len(sr.Rows) > 0 {
+				pending := toI64(sr.Rows[0][0]) - wmCur
+				if pending > 0 {
+					diags = append(diags, map[string]any{
+						"level": "warn", "source": "cdc",
+						"message": fmt.Sprintf("活库检测到 %d 笔新交易未同步(水位停在 %d),点『立即同步』增量入仓。", pending, wmCur),
+						"action": "sync", "action_label": "立即同步",
+					})
+				}
+			}
+		}
+		out["diagnostics"] = diags
+		return out
+	}
+
+	runAction := func(cmd string) map[string]any {
+		if cmd == "" {
+			return map[string]any{"ok": false, "output": "no action configured"}
+		}
+		out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+		return map[string]any{"ok": err == nil, "output": strings.TrimSpace(string(out))}
+	}
+	cors := func(w http.ResponseWriter) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+	}
+	action := func(cmd *string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			cors(w)
+			if r.Method == http.MethodOptions {
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(runAction(*cmd))
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status())
+	})
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/action/sync", action(actSync))
+	mux.HandleFunc("/action/test", action(actTest))
+	fmt.Fprintf(os.Stderr, "ingest-status on %s  GET /status · POST /action/{sync,test} (CORS) ← warehouse %s\n", *addr, *factTable)
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		fail(err)
+	}
+}
+
+// runWebhookIngest is the PUSH counterpart to `di sync`: a SaaS platform (有赞/
+// 美团/OTA…) POSTs each order in real time; we HMAC-verify it, land the JSON into
+// a staging table, run a transform (upsert into the governed warehouse), and ack.
+// Same governance gate as file/CDC ingest — the platform pushes, we don't poll.
+func runWebhookIngest(argv []string) {
+	fs := flag.NewFlagSet("webhook-ingest", flag.ExitOnError)
+	destDSN := fs.String("dest", envOr("DI_DSN", defaultDSN), "governed warehouse DSN")
+	addr := fs.String("addr", envOr("DI_WEBHOOK_ADDR", ":34210"), "listen address")
+	secret := fs.String("secret", os.Getenv("DI_WEBHOOK_SECRET"), "HMAC-SHA256 secret; deliveries sign the body in X-Signature (empty = accept unsigned)")
+	stage := fs.String("stage", "stg_orders_webhook", "staging table for each delivery")
+	required := fs.String("required", "", "comma-separated stage columns that must be non-empty")
+	after := fs.String("after", "", "SQL file run on dest after landing each delivery (transform → governed)")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	dest, err := warehouse.Open(ctx, *destDSN, warehouse.Options{})
+	if err != nil {
+		fail(err)
+	}
+	defer dest.Close()
+	afterSQL := ""
+	if *after != "" {
+		b, err := os.ReadFile(*after)
+		if err != nil {
+			fail(err)
+		}
+		afterSQL = string(b)
+	}
+	ensureIngestLog(ctx, dest)
+
+	var mu sync.Mutex
+	var landed int
+	handle := func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "read", http.StatusBadRequest)
+			return
+		}
+		// HMAC verification: a bad signature is a security event — reject.
+		if *secret != "" {
+			mac := hmac.New(sha256.New, []byte(*secret))
+			mac.Write(body)
+			want := hex.EncodeToString(mac.Sum(nil))
+			got := r.Header.Get("X-Signature")
+			if !hmac.Equal([]byte(want), []byte(got)) {
+				http.Error(w, "bad signature", http.StatusUnauthorized)
+				fmt.Fprintf(os.Stderr, "← webhook REJECT: bad signature\n")
+				return
+			}
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(body, &obj); err != nil || len(obj) == 0 {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		// Flatten to a single Record with sorted keys → stable stage schema.
+		keys := make([]string, 0, len(obj))
+		for k := range obj {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		schema := connectors.SourceSchema{Name: *stage}
+		rec := connectors.Record{}
+		for _, k := range keys {
+			schema.Fields = append(schema.Fields, connectors.Field{Name: k, Type: "text"})
+			rec[k] = fmt.Sprintf("%v", obj[k])
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if _, err := dest.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %q`, *stage)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plan := ingest.InferMapping(schema, *stage, nil)
+		plan.Required = split(*required)
+		if _, err := ingest.Run(ctx, dest, connectors.Batch{Schema: schema, Rows: []connectors.Record{rec}}, plan); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if afterSQL != "" {
+			if _, err := dest.Exec(ctx, afterSQL); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		landed++
+		logIngest(ctx, dest, "webhook", fmt.Sprintf("order %v", obj["order_id"]), 1, toI64(fmt.Sprintf("%v", obj["order_id"])))
+		fmt.Fprintf(os.Stderr, "← webhook accept #%d: %v\n", landed, obj)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("POST /webhook", handle)
+	note := "unsigned (no secret)"
+	if *secret != "" {
+		note = "HMAC-verified"
+	}
+	fmt.Fprintf(os.Stderr, "order webhook receiver on %s  POST /webhook (%s) → %s → governed\n", *addr, note, *stage)
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		fail(err)
+	}
 }
 
 // runShadow compiles+runs a query through two model versions and diffs the
@@ -1412,7 +1831,7 @@ func runNode(_ []string) {
 // `ingest` sources from the sources manifest (DI_SOURCES). The platform binary
 // carries NO domain flow logic — flows are data supplied by the example/customer.
 func newFlowEngine(ctx context.Context, dsn string) (*flow.Engine, *warehouse.Warehouse) {
-	wh, err := warehouse.OpenPostgres(ctx, dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -1866,7 +2285,7 @@ func runOBO(argv []string) {
 		dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
 		file := fs.String("file", "deploy/schema/03_obo_rls.sql", "RLS policy SQL")
 		_ = fs.Parse(argv[1:])
-		wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+		wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 		if err != nil {
 			fail(err)
 		}
@@ -1885,7 +2304,7 @@ func runOBO(argv []string) {
 		dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
 		region := fs.String("region", "South", "region to scope the session to")
 		_ = fs.Parse(argv[1:])
-		wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{AppRole: "di_app"})
+		wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{AppRole: "di_app"})
 		if err != nil {
 			fail(err)
 		}
@@ -1935,7 +2354,7 @@ func runOBO(argv []string) {
 		}
 		fmt.Printf("2) exchanged (RFC 8693) → warehouse token aud=%q sub=%s region=%s (%d-char JWT)\n", *whAud, id.User, id.Region, len(whTok))
 		// 3) Open the DB session AS that identity and run a raw cross-region query.
-		wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{AppRole: "di_app"})
+		wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{AppRole: "di_app"})
 		if err != nil {
 			fail(err)
 		}
@@ -2025,7 +2444,7 @@ func runSource(argv []string) {
 		if tbl == "" {
 			tbl = "_src_" + name
 		}
-		wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+		wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 		if err != nil {
 			fail(err)
 		}
@@ -2079,7 +2498,7 @@ func runWebhook(argv []string) {
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -2113,7 +2532,7 @@ func runCRM(argv []string) {
 		os.Exit(2)
 	}
 	ctx := context.Background()
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
@@ -2195,7 +2614,7 @@ func runIngest(argv []string) {
 		fmt.Fprintf(os.Stderr, "   %-16s → %-16s [%s]\n", fm.Source, fm.Target, fm.Type)
 	}
 
-	wh, err := warehouse.OpenPostgres(ctx, *dsn, warehouse.Options{})
+	wh, err := warehouse.Open(ctx, *dsn, warehouse.Options{})
 	if err != nil {
 		fail(err)
 	}
