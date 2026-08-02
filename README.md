@@ -118,6 +118,7 @@ Build order is load-bearing: **meaning first, transport last.**
 | Governance | RBAC, masking, RLS, k-anon, threat-model-as-code | `di threats` |
 | Identity | real OIDC/JWT + on-behalf-of to the warehouse | `di obo`, `di pentest` |
 | Evaluation | accuracy gate vs control SQL + LLM judge | `di nleval` |
+| Handover | delivery report: what was modelled, and what proves it | `di report` |
 | Write-back | NL → typed proposal → approve → commit → rollback | `di propose/approve/revert` |
 | Rollout | model version registry, canary, auto-rollback | `di rollout` |
 | Service | config-driven daemon, REST /v1 + MCP | `di serve` |
@@ -308,6 +309,50 @@ executive-facing UI.
 
 **DI does not ship an end-user product.** Keeping that line means the engine stays
 domain-neutral and embeddable, instead of growing a second, weaker BI tool inside it.
+
+## The handover document
+
+Modelling someone's warehouse is otherwise unfalsifiable work: you deliver a YAML
+file and a dashboard, and nobody — including you — can say whether the numbers
+are right. Two gates already answer that; `di report` renders them as one
+document for the person paying for it.
+
+```bash
+di report -model models/shop.yaml -dsn "$DSN" -database "Acme" -out delivery.md
+```
+
+```
+PARTIAL — 6/10 metrics reconcile, 4 have no control query
+
+## Not verified (4)
+- revenue_rolling_3   - revenue_delta   - revenue_cumulative   - revenue_ytd
+
+## Metric reconciliation — 6/6
+| net_revenue | 6126603.38 | 6126603.38 | ✓ |
+  The contested one — revenue net of refunds. Two tables at different grains,
+  which is exactly where a hand-written join would inflate the total.
+
+## Natural-language accuracy — 100% (37/37)
+```
+
+The gaps come first, by name. A report that shows only what passed is marketing,
+and the reader finds the holes later anyway — at a worse moment. `PARTIAL` and
+`VERIFIED` are different words for a reason: six checks over ten metrics is not
+the same claim as six over six.
+
+Reconciliation cases are **data**, beside the model:
+
+```yaml
+# models/shop.recon.yaml
+cases:
+  - metric: net_revenue
+    control: SELECT (SELECT sum(quantity*unit_price) FROM order_items)
+                  - (SELECT sum(refund_amount) FROM refunds)
+    note: Revenue net of refunds — two tables at different grains.
+```
+
+They used to be Go code listing one example's metrics, which meant standing up a
+new customer produced a green check for metrics that customer does not have.
 
 ## Status
 

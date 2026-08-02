@@ -1,0 +1,37 @@
+# Reconciliation set for models/meridian.yaml.
+#
+# Every metric is computed twice: once through the semantic layer, once with a
+# control query written by hand. They must agree. This is the only check that
+# catches the failure the whole layer exists to prevent — a number produced
+# cleanly that is the wrong number. The compiler cannot check itself.
+#
+# `di eval` reads this file; `di report` renders it for the customer.
+cases:
+  - metric: total_revenue
+    control: SELECT sum(quantity*unit_price) FROM order_items
+    note: Gross of refunds, at line-item grain — refunds are a separate metric.
+
+  - metric: units_sold
+    control: SELECT sum(quantity) FROM order_items
+
+  - metric: order_count
+    control: SELECT count(DISTINCT order_id) FROM orders
+    note: One order counted once, however many lines it has.
+
+  - metric: refund_total
+    control: SELECT sum(refund_amount) FROM refunds
+
+  - metric: net_revenue
+    control: SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)
+    note: The contested one — revenue net of refunds. Two tables at different
+      grains, which is exactly where a hand-written join would inflate the total.
+
+  - metric: avg_order_value
+    control: SELECT (SELECT sum(quantity*unit_price) FROM order_items)/nullif((SELECT count(DISTINCT order_id) FROM orders),0)
+    note: AOV is a ratio across two grains — line items over orders. Computing it
+      as an average of line totals is the classic wrong answer, so it is checked.
+
+# Not covered, and deliberately so: revenue_rolling_3, revenue_delta,
+# revenue_cumulative and revenue_ytd are window metrics. They return a series,
+# not a scalar, so a single control query cannot express them. `di report` lists
+# them as unverified rather than letting a green 5/5 imply the model is covered.

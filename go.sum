@@ -208,8 +208,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80 h1:6Yzfa6GP0rIo/kULo2bwGEkFvCePZ3qHDDTC3/J9Swo=
 github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80/go.mod h1:imJHygn/1yfhB7XSJJKlFZKl/J+dCPAknuiaGOshXAs=
-github.com/liliang-cn/agent-go/v2 v2.101.1 h1:oRmcqPjt/YmJZC71lRXdcrYmhj4vfPedN505I9WIUOU=
-github.com/liliang-cn/agent-go/v2 v2.101.1/go.mod h1:vznqnwRi7oq3PetMb2IX3FNVTOHjWw8c1l3n3mXlqGg=
+github.com/liliang-cn/agent-go/v2 v2.107.0 h1:8OJhoDvhV5F8WUVUYA0Jy6DDSjdv9M5Pyof+793CHhM=
+github.com/liliang-cn/agent-go/v2 v2.107.0/go.mod h1:vznqnwRi7oq3PetMb2IX3FNVTOHjWw8c1l3n3mXlqGg=
 github.com/liliang-cn/cortexdb/v2 v2.51.0 h1:ugdQVfRxjE3aB6lfYp3Ozhus43IVLi1eEYbB9+Qm1Ss=
 github.com/liliang-cn/cortexdb/v2 v2.51.0/go.mod h1:O4EPYRbBsEpEsRisT2Hs2jhKVoEMPuRm87xAXpwLMwc=
 github.com/liliang-cn/eval-go v0.4.0 h1:qMkhS0XrvWn4nCI+KlJWnEPPSkUX4CemCudV9cX7x7c=

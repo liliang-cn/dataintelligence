@@ -131,6 +131,7 @@ func rootCmd() *cobra.Command {
 		leaf("exemplar", "model", "Manage the few-shot exemplar bank", runExemplar),
 		leaf("eval", "model", "Reconciliation gate (metrics vs control SQL)", runEval),
 		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
+		leaf("report", "model", "Delivery report: what was modelled and what proves it", runReport),
 		leaf("bench", "model", "Public benchmark (Spider): coverage + correctness", runBench),
 		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
 		leaf("rollout", "model", "Version registry, canary, auto-rollback", runRollout),
@@ -1030,84 +1031,83 @@ func runEval(argv []string) {
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
 	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	recon := fs.String("recon", "", "reconciliation set (default: <model>.recon.yaml)")
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
-	eng, err := engine.New(ctx, *model, *dsn)
+	rep, eng, err := reconcileModel(ctx, *model, *dsn, *recon)
 	if err != nil {
 		fail(err)
 	}
 	defer eng.Close()
 
-	cases := reconCases()
-	pass := 0
-	for _, c := range cases {
-		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.metric}})
-		if err != nil {
-			fmt.Printf("  [FAIL] %-14s compile/run: %v\n", c.name, err)
-			continue
-		}
-		got := scalar(ans.Rows)
-		ctrl, err := eng.WH.Query(ctx, c.control)
-		if err != nil {
-			fail(err)
-		}
-		want := scalar(ctrl.Rows)
-		if floatEq(got, want) {
-			fmt.Printf("  [PASS] %-14s %s\n", c.name, got)
-			pass++
-		} else {
-			fmt.Printf("  [FAIL] %-14s got=%s want=%s\n", c.name, got, want)
+	for _, r := range rep.Results {
+		switch {
+		case r.Error != "":
+			fmt.Printf("  [FAIL] %-18s %s\n", r.Metric, r.Error)
+		case r.Pass:
+			fmt.Printf("  [PASS] %-18s %s\n", r.Metric, nleval.Num(r.Got))
+		default:
+			fmt.Printf("  [FAIL] %-18s got=%s want=%s\n", r.Metric, nleval.Num(r.Got), nleval.Num(r.Want))
 		}
 	}
-	fmt.Printf("eval: %d/%d passed\n", pass, len(cases))
-	if pass != len(cases) {
+	if un := rep.Uncovered(eng.Model); len(un) > 0 {
+		// Coverage is stated, not implied. "5/5 passed" over forty metrics is a
+		// different claim than 5/5 over five, and only one is worth trusting.
+		fmt.Printf("  [GAP]  %d metric(s) have no control query: %s\n", len(un), strings.Join(un, ", "))
+	}
+	fmt.Printf("eval: %d/%d passed (%d of %d metrics covered)\n",
+		rep.Passed, rep.Total, rep.Covered, rep.Declared)
+	if rep.Passed != rep.Total {
 		os.Exit(1) // regression / drift detected
 	}
 }
 
-type reconCase struct{ name, metric, control string }
-
-// reconCases are the deterministic metric→control reconciliation checks shared
-// by `di eval` and the canary health watcher.
-func reconCases() []reconCase {
-	return []reconCase{
-		{"total_revenue", "total_revenue", "SELECT sum(quantity*unit_price) FROM order_items"},
-		{"units_sold", "units_sold", "SELECT sum(quantity) FROM order_items"},
-		{"order_count", "order_count", "SELECT count(DISTINCT order_id) FROM orders"},
-		{"refund_total", "refund_total", "SELECT sum(refund_amount) FROM refunds"},
-		{"net_revenue", "net_revenue", "SELECT (SELECT sum(quantity*unit_price) FROM order_items)-(SELECT sum(refund_amount) FROM refunds)"},
+// reconcileModel loads a model, its reconciliation set, and runs the gate. The
+// set lives beside the model as data: it was Go code listing one example's
+// metrics, so standing up a new customer produced a green check for metrics
+// that customer does not have — verification that verified nothing.
+func reconcileModel(ctx context.Context, modelPath, dsn, reconPath string) (*nleval.ReconReport, *engine.Engine, error) {
+	if reconPath == "" {
+		reconPath = nleval.ReconPathFor(modelPath)
 	}
+	set, err := nleval.LoadReconSet(reconPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("no reconciliation set at %s — write one:\n\ncases:\n  - metric: total_revenue\n    control: SELECT sum(quantity*unit_price) FROM order_items\n    note: why this definition, in the customer's words", reconPath)
+		}
+		return nil, nil, err
+	}
+	eng, err := engine.New(ctx, modelPath, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	rep, err := nleval.Reconcile(ctx, eng, set)
+	if err != nil {
+		eng.Close()
+		return nil, nil, err
+	}
+	return rep, eng, nil
 }
 
 // healthScore runs the reconciliation checks against a model and returns the
 // fraction that match their control query — the canary's health signal.
 func healthScore(ctx context.Context, modelPath, dsn string) (float64, []string, error) {
-	eng, err := engine.New(ctx, modelPath, dsn)
+	rep, eng, err := reconcileModel(ctx, modelPath, dsn, "")
 	if err != nil {
 		return 0, nil, err
 	}
 	defer eng.Close()
-	cases := reconCases()
-	pass := 0
+	if rep.Total == 0 {
+		return 0, nil, fmt.Errorf("no reconciliation cases for %s", modelPath)
+	}
 	var failed []string
-	for _, c := range cases {
-		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.metric}})
-		if err != nil {
-			failed = append(failed, c.name)
-			continue
-		}
-		ctrl, err := eng.WH.Query(ctx, c.control)
-		if err != nil {
-			return 0, nil, err
-		}
-		if floatEq(scalar(ans.Rows), scalar(ctrl.Rows)) {
-			pass++
-		} else {
-			failed = append(failed, c.name)
+	for _, r := range rep.Results {
+		if !r.Pass {
+			failed = append(failed, r.Metric)
 		}
 	}
-	return float64(pass) / float64(len(cases)), failed, nil
+	return float64(rep.Passed) / float64(rep.Total), failed, nil
 }
 
 // runNLEval is the natural-language evaluation closed-loop:
@@ -3102,4 +3102,79 @@ func envBytes(k string) int64 {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "di:", err)
 	os.Exit(1)
+}
+
+// runReport renders the handover document for an engagement.
+//
+// Modelling someone's warehouse is otherwise unfalsifiable work: you deliver a
+// YAML file and a dashboard, and nobody — including you — can say whether the
+// numbers are right. Both gates that answer that already run in CI; nothing
+// rendered them as one document for the person paying for it.
+func runReport(argv []string) {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	recon := fs.String("recon", "", "reconciliation set (default: <model>.recon.yaml)")
+	set := fs.String("set", "models/nl_evalset.yaml", "labeled NL eval set (skipped if absent)")
+	database := fs.String("database", "", "customer/database name for the heading")
+	out := fs.String("out", "", "write markdown here (default: stdout)")
+	jsonOut := fs.String("json", "", "also write the machine-readable report here")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	d := &nleval.Delivery{Database: *database, Model: *model}
+
+	// Reconciliation is the load-bearing half. Without it the report says so
+	// rather than printing a shape and letting it read as verification.
+	rep, eng, err := reconcileModel(ctx, *model, *dsn, *recon)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "-- reconciliation unavailable: %v\n", err)
+		eng, err = engine.New(ctx, *model, *dsn)
+		if err != nil {
+			fail(err)
+		}
+	} else {
+		d.Recon = rep
+		d.Uncovered = rep.Uncovered(eng.Model)
+	}
+	defer eng.Close()
+	d.Describe(eng.Model)
+
+	for _, is := range semantic.Lint(eng.Model) {
+		d.Notes = append(d.Notes, is.String())
+	}
+
+	// NL accuracy is optional: a delivery without a labelled set is still a
+	// delivery, and an empty accuracy section is more honest than a fabricated one.
+	if ds, lerr := nleval.Load(*set); lerr == nil {
+		dir, _ := os.MkdirTemp("", "di-report-")
+		defer os.RemoveAll(dir)
+		if g, gerr := grounding.New(ctx, eng.Model, filepath.Join(dir, "idx.db")); gerr == nil {
+			defer g.Close()
+			if bank, berr := grounding.LoadExemplars(ctx, "models/exemplars.yaml"); berr == nil {
+				g.WithExemplars(bank)
+			}
+			grader := &nleval.Grader{Eng: eng, Gr: g, Pol: governance.DefaultPolicy()}
+			d.NL = grader.Run(ctx, ds, strings.Contains(g.Mode(), "llm"))
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "-- no NL eval set at %s; accuracy section omitted\n", *set)
+	}
+
+	var buf strings.Builder
+	d.WriteMarkdown(&buf)
+	if *out == "" {
+		fmt.Print(buf.String())
+	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
+		fail(err)
+	} else {
+		fmt.Fprintf(os.Stderr, "-- wrote %s\n", *out)
+	}
+	if *jsonOut != "" {
+		b, _ := json.MarshalIndent(d, "", "  ")
+		if err := os.WriteFile(*jsonOut, b, 0o644); err != nil {
+			fail(err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "-- %s\n", d.Verdict())
 }
