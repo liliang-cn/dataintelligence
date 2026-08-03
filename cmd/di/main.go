@@ -15,9 +15,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -3148,9 +3150,14 @@ func runReport(argv []string) {
 		if *database == "" {
 			database = &name
 		}
-		if es != "" {
-			set = &es
-		}
+		// An engagement with no `evalset:` has no evalset — it does not fall
+		// back to the platform's own. The default is a path relative to the
+		// working directory, and run from this repo it resolves to the retail
+		// demo set, which put "what is total revenue" and thirty-six wrong
+		// answers about store regions into a foundry's acceptance report. A
+		// delivery document containing another customer's questions is worse
+		// than one with no accuracy section at all.
+		set = &es
 		if *out == "" && ro != "" {
 			out = &ro
 		}
@@ -3181,7 +3188,8 @@ func runReport(argv []string) {
 
 	// NL accuracy is optional: a delivery without a labelled set is still a
 	// delivery, and an empty accuracy section is more honest than a fabricated one.
-	if ds, lerr := nleval.Load(*set); lerr == nil {
+	ds, lerr := nleval.Load(*set)
+	if lerr == nil {
 		dir, _ := os.MkdirTemp("", "di-report-")
 		defer os.RemoveAll(dir)
 		if g, gerr := grounding.New(ctx, eng.Model, filepath.Join(dir, "idx.db")); gerr == nil {
@@ -3192,8 +3200,17 @@ func runReport(argv []string) {
 			grader := &nleval.Grader{Eng: eng, Gr: g, Pol: governance.DefaultPolicy()}
 			d.NL = grader.Run(ctx, ds, strings.Contains(g.Mode(), "llm"))
 		}
-	} else {
+	} else if *set == "" {
+		fmt.Fprintln(os.Stderr, "-- no evalset declared; accuracy section omitted")
+	} else if errors.Is(lerr, iofs.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "-- no NL eval set at %s; accuracy section omitted\n", *set)
+	} else {
+		// A declared evalset that will not parse is a mistake, not an absence.
+		// Reported as "no eval set" it reads identically to not having one, and
+		// the delivery goes out with the accuracy section quietly missing —
+		// which is how a typo (`expect:` for `expect_metrics:`) turned into an
+		// acceptance report that said nothing about accuracy at all.
+		fail(fmt.Errorf("evalset %w", lerr))
 	}
 
 	var buf strings.Builder

@@ -226,6 +226,12 @@ func (g *Grounder) GroundWithFeedback(ctx context.Context, question, feedback st
 	}
 	if g.llm == nil {
 		q, err := g.keyword(question, retrieved)
+		if errors.Is(err, errNoMetricMatched) {
+			return semantic.Query{}, retrieved, &Clarify{
+				Question:   "Which measure? Name it and I will answer that one.",
+				Candidates: candidateNames(retrieved),
+			}, nil
+		}
 		return q, retrieved, nil, err
 	}
 	q, cl, err := g.llmGround(ctx, question, retrieved, feedback)
@@ -449,9 +455,12 @@ func (g *Grounder) keyword(question string, retrieved []ScoredMetric) (semantic.
 			seen[c.metric] = true
 		}
 	}
-	if len(metrics) == 0 && len(retrieved) > 0 {
-		metrics = []string{retrieved[0].Name} // best retrieval hit
-	}
+	// No fallback to the best retrieval hit. Retrieval ranks by similarity, and
+	// on a model where every metric is about the same plant everything is
+	// somewhat similar: "总电耗" (a sum) came back as "吨件电耗" (a ratio),
+	// confidently, with a number attached. A wrong metric answered cleanly is
+	// the failure this layer exists to prevent, and it is not less of one for
+	// having come from the offline path. Nothing matched means nothing matched.
 
 	var groupBy []string
 	for i := range g.model.Dimensions {
@@ -465,9 +474,27 @@ func (g *Grounder) keyword(question string, retrieved []ScoredMetric) (semantic.
 		}
 	}
 	if len(metrics) == 0 {
-		return semantic.Query{}, errors.New("no metric matched")
+		return semantic.Query{}, errNoMetricMatched
 	}
 	return semantic.Query{Metrics: dedup(metrics), GroupBy: dedup(groupBy)}, nil
+}
+
+// errNoMetricMatched is a sentinel so the caller can turn "nothing matched"
+// into a question rather than an error the UI has to render as a failure.
+var errNoMetricMatched = errors.New("no metric matched")
+
+// candidateNames offers the retrieval shortlist, not the whole model. Ten names
+// is a question; forty-four is a shrug.
+func candidateNames(retrieved []ScoredMetric) []string {
+	const max = 10
+	out := make([]string, 0, max)
+	for _, r := range retrieved {
+		if len(out) == max {
+			break
+		}
+		out = append(out, r.Name)
+	}
+	return out
 }
 
 func normalize(s string) string { return strings.ToLower(strings.ReplaceAll(s, "_", " ")) }

@@ -36,12 +36,13 @@ func Ratios(t Table, entity string, numericCols []string) []semantic.Metric {
 		has[c] = true
 	}
 
-	var out []semantic.Metric
+	sum := func(col string) string { return entity + "_" + col + "_sum" }
+	out := yields(t, entity, numericCols, sum)
+
 	revenue := firstMatching(numericCols, revenueWords)
 	if revenue == "" {
-		return nil // without a value column there is no ratio worth proposing
+		return out // no value column: whatever the yield pass found, and nothing else
 	}
-	sum := func(col string) string { return entity + "_" + col + "_sum" }
 
 	if cost := firstMatching(numericCols, costWords); cost != "" && cost != revenue {
 		out = append(out, semantic.Metric{

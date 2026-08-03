@@ -220,6 +220,8 @@ github.com/liliang-cn/pipeit v0.1.0 h1:ZU5hkL5SXr6vHtn/gcJBX9i55l0HM4rVsYTfxqn5M
 github.com/liliang-cn/pipeit v0.1.0/go.mod h1:ghxqa1CKTztR5me4vl8srIYQhfv89tc37SnocoXv4/E=
 github.com/liliang-cn/semantic-go v0.1.6 h1:PrPzB0/XtNUtPhK2J4DQpi0WvIpXnY7y2NxWxALUCbs=
 github.com/liliang-cn/semantic-go v0.1.6/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
+github.com/liliang-cn/semantic-go v0.1.7 h1:gfIVfiGti8z1L4Tn95n4D/1nEaL8HQk/34cNkiua0Qg=
+github.com/liliang-cn/semantic-go v0.1.7/go.mod h1:2ChGRAEhc3bP4G6PZwAwnJopqWy9M5WL+EdpfgoNhvk=
 github.com/liliang-cn/skills-go v1.7.0 h1:l3VqaypdDkUS/AoU+uIysTljFaWHYp730OGuYxIlET8=
 github.com/liliang-cn/skills-go v1.7.0/go.mod h1:9uDod4rl/qZmh2vu6jcmbMMf0bjms7QNpBePg3zXxUo=
 github.com/marcboeker/go-duckdb v1.8.5 h1:tkYp+TANippy0DaIOP5OEfBEwbUINqiFqgwMQ44jME0=

@@ -27,10 +27,15 @@ import (
 type Drift struct {
 	Database string `json:"database"`
 
-	MissingTables  []string     `json:"missing_tables,omitempty"`
-	MissingColumns []ColumnRef  `json:"missing_columns,omitempty"`
-	StaleFeeds     []StaleFeed  `json:"stale_feeds,omitempty"`
-	Failing        []FailedCase `json:"failing_metrics,omitempty"`
+	MissingTables  []string    `json:"missing_tables,omitempty"`
+	MissingColumns []ColumnRef `json:"missing_columns,omitempty"`
+	StaleFeeds     []StaleFeed `json:"stale_feeds,omitempty"`
+	// SegmentGaps is one plant's feed stopping while the others keep reporting.
+	// The survey finds these on day one; the survey runs once. This is the check
+	// that runs every morning, so it is the one that has to see them — a table
+	// whose totals are quietly missing a workshop never looks stale at all.
+	SegmentGaps []survey.SegmentGap `json:"segment_gaps,omitempty"`
+	Failing     []FailedCase        `json:"failing_metrics,omitempty"`
 
 	CheckedAt time.Time `json:"checked_at"`
 }
@@ -64,7 +69,7 @@ type FailedCase struct {
 // Clean reports whether nothing needs attention.
 func (d *Drift) Clean() bool {
 	return len(d.MissingTables) == 0 && len(d.MissingColumns) == 0 &&
-		len(d.StaleFeeds) == 0 && len(d.Failing) == 0
+		len(d.StaleFeeds) == 0 && len(d.SegmentGaps) == 0 && len(d.Failing) == 0
 }
 
 // Check compares the delivered model against the warehouse as it is now.
@@ -120,7 +125,18 @@ func Check(ctx context.Context, eng *engine.Engine, set *nleval.ReconSet, staleA
 		}
 	}
 
-	d.StaleFeeds = staleFeeds(ctx, eng, tableOf, live, staleAfter)
+	// One profiling pass over the tables the model actually reads, reused for
+	// both the staleness cadence and the segment gaps.
+	tables := make([]string, 0, len(tableOf))
+	for _, t := range tableOf {
+		tables = append(tables, t)
+	}
+	prof, perr := survey.Run(ctx, eng.WH, "", survey.Options{SkipOrphans: true, Only: tables})
+	if perr == nil {
+		d.SegmentGaps = prof.Gaps
+	}
+
+	d.StaleFeeds = staleFeeds(ctx, eng, tableOf, live, staleAfter, prof)
 
 	if set != nil && len(set.Cases) > 0 {
 		rep, rerr := nleval.Reconcile(ctx, eng, set)
@@ -142,7 +158,7 @@ func Check(ctx context.Context, eng *engine.Engine, set *nleval.ReconSet, staleA
 // stopped sending leaves each row valid and the totals merely not growing,
 // which is the failure nobody notices until a quarter looks flat.
 func staleFeeds(ctx context.Context, eng *engine.Engine, tableOf map[string]string,
-	live map[string]map[string]bool, staleAfter time.Duration) []StaleFeed {
+	live map[string]map[string]bool, staleAfter time.Duration, prof *survey.Report) []StaleFeed {
 	var out []StaleFeed
 	for i := range eng.Model.Dimensions {
 		dim := &eng.Model.Dimensions[i]
@@ -171,7 +187,15 @@ func staleFeeds(ctx context.Context, eng *engine.Engine, tableOf map[string]stri
 		if !ok {
 			continue
 		}
-		if behind := time.Since(newest); behind > staleAfter {
+		// Judge lateness against the feed's own cadence, not a fixed number of
+		// days. Monthly meter readings are thirty-odd days old for most of every
+		// month; flagging that daily trains the reader to skim the section that
+		// matters. Two periods of silence is late in any cadence.
+		threshold := staleAfter
+		if c := cadenceFor(prof, table, dim.Column, newest); c > 0 && 2*c > threshold {
+			threshold = 2 * c
+		}
+		if behind := time.Since(newest); behind > threshold {
 			out = append(out, StaleFeed{
 				Dimension: dim.Name, Table: table, Column: dim.Column,
 				Newest: newest.Format("2006-01-02"), Days: int(behind.Hours() / 24),
@@ -180,6 +204,24 @@ func staleFeeds(ctx context.Context, eng *engine.Engine, tableOf map[string]stri
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Days > out[j].Days })
 	return out
+}
+
+// cadenceFor reads the column's own period length off the profiling pass.
+func cadenceFor(prof *survey.Report, table, column string, newest time.Time) time.Duration {
+	if prof == nil {
+		return 0
+	}
+	for _, t := range prof.Tables {
+		if !strings.EqualFold(t.Name, table) {
+			continue
+		}
+		for _, c := range t.Columns {
+			if strings.EqualFold(c.Name, column) && c.Distinct > 1 {
+				return survey.CadenceOf(newest, c.Min, int(c.Distinct))
+			}
+		}
+	}
+	return 0
 }
 
 func rowsIn(ctx context.Context, eng *engine.Engine, table string) int64 {
@@ -241,6 +283,9 @@ func (d *Drift) Summary() string {
 			parts = append(parts, fmt.Sprintf("%d feed(s) stopped", n))
 		}
 	}
+	if n := len(d.SegmentGaps); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d part(s) of a table stopped while the rest kept going", n))
+	}
 	if n := len(d.Failing); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d metric(s) no longer match their control", n))
 	}
@@ -274,6 +319,10 @@ func (d *Drift) WriteText(w interface{ Write([]byte) (int, error) }) {
 			continue
 		}
 		p("  %s stops at %s (%d days ago) — totals over it are quietly no longer growing", s.Dimension, s.Newest, s.Days)
+	}
+	for _, g := range d.SegmentGaps {
+		p("  %s.%s = %s last reported %s, %d period(s) behind the rest of the table — every total over %s is short by it",
+			g.Table, g.By, g.Segment, g.Newest, g.Behind, g.Table)
 	}
 	for _, f := range d.Failing {
 		if f.Error != "" {

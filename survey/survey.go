@@ -55,13 +55,15 @@ type Orphan struct {
 
 // Report is the whole survey.
 type Report struct {
-	Database string    `json:"database"`
-	Driver   string    `json:"driver"`
-	Tables   []Table   `json:"tables"`
-	Orphans  []Orphan  `json:"orphans,omitempty"`
-	Findings []string  `json:"findings,omitempty"` // database-level
-	TakenAt  time.Time `json:"taken_at"`
-	Sampled  int       `json:"sample_rows"` // rows sampled per column profile (0 = full scan)
+	Database string       `json:"database"`
+	Driver   string       `json:"driver"`
+	Tables   []Table      `json:"tables"`
+	Orphans  []Orphan     `json:"orphans,omitempty"`
+	Implied  []ImpliedRef `json:"implied_refs,omitempty"`
+	Gaps     []SegmentGap `json:"segment_gaps,omitempty"`
+	Findings []string     `json:"findings,omitempty"` // database-level
+	TakenAt  time.Time    `json:"taken_at"`
+	Sampled  int          `json:"sample_rows"` // rows sampled per column profile (0 = full scan)
 }
 
 // Options bound the cost. A survey runs against a customer's production
@@ -76,6 +78,11 @@ type Options struct {
 	StaleAfter time.Duration
 	// SkipOrphans skips referential-integrity probes, which are the costliest part.
 	SkipOrphans bool
+	// Only restricts the survey to these tables. The day-2 drift check uses it
+	// to profile just what the model depends on: a warehouse has a thousand
+	// tables and the delivery reads thirteen, and a gate that costs a full
+	// profile every morning is a gate somebody switches off.
+	Only []string
 }
 
 func (o *Options) withDefaults() {
@@ -97,7 +104,15 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, database string, opts Opt
 	q := quoter(wh.Driver())
 	rep := &Report{Database: database, Driver: wh.Driver(), TakenAt: time.Now(), Tables: []Table{}}
 
+	only := map[string]bool{}
+	for _, n := range opts.Only {
+		only[strings.ToLower(n)] = true
+	}
+
 	for _, t := range schema.Tables {
+		if len(only) > 0 && !only[strings.ToLower(t.Name)] {
+			continue
+		}
 		tbl := Table{Name: t.Name, PrimaryKey: t.PrimaryKey}
 		tbl.Rows = scalarInt(ctx, wh, fmt.Sprintf("SELECT count(*) FROM %s", q(t.Name)))
 
@@ -118,11 +133,13 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, database string, opts Opt
 			}
 			tbl.Columns = append(tbl.Columns, col)
 		}
+		rep.Gaps = append(rep.Gaps, findSegmentGaps(ctx, wh, q, tbl)...)
 		rep.Tables = append(rep.Tables, tbl)
 	}
 
 	if !opts.SkipOrphans {
 		rep.Orphans = orphans(ctx, wh, q, schema)
+		rep.Implied = findImpliedRefs(ctx, wh, q, schema)
 	}
 	rep.Findings = summarise(rep)
 	return rep, nil
@@ -249,6 +266,24 @@ func summarise(r *Report) []string {
 		out = append(out, fmt.Sprintf(
 			"%d tables all stop at %s: %s — one event, not %d problems. A load that stopped, or a migration nobody mentioned?",
 			len(tables), date, strings.Join(tables, ", "), len(tables)))
+	}
+	if n := len(r.Gaps); n > 0 {
+		// The shape the problem takes in a company with several sites: one
+		// stops reporting, the table keeps moving because the others do, and
+		// the totals are quietly missing a plant.
+		g := r.Gaps[0]
+		out = append(out, fmt.Sprintf(
+			"%d part(s) of a table stopped while the rest kept going — %s.%s = %q last reported %s, %d periods behind. Table-level checks cannot see this.",
+			n, g.Table, g.By, g.Segment, g.Newest, g.Behind))
+	}
+	if n := len(r.Implied); n > 0 {
+		var rows int64
+		for _, i := range r.Implied {
+			rows += i.Orphans
+		}
+		out = append(out, fmt.Sprintf(
+			"%d column(s) reference another table by name with no foreign key, and %s value(s) do not match — cross-system code matching, which is where it usually breaks",
+			n, humanInt(rows)))
 	}
 	if n := len(r.Orphans); n > 0 {
 		var rows int64

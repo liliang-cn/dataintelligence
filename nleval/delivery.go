@@ -202,8 +202,8 @@ func (d *Delivery) WriteMarkdown(w io.Writer) {
 		var failed []string
 		for _, c := range d.NL.Cases {
 			if !c.Skipped && !c.Passed {
-				failed = append(failed, fmt.Sprintf("- **%s** — %q → got %v, expected %v",
-					c.Case, c.Question, c.Predicted, c.Expected))
+				failed = append(failed, fmt.Sprintf("- **%s** — %q → got %s, expected %s",
+					c.Case, c.Question, metricList(c.Predicted), metricList(c.Expected)))
 			}
 		}
 		if len(failed) > 0 {
@@ -265,4 +265,22 @@ func Num(f float64) string {
 		return fmt.Sprintf("%d", int64(f))
 	}
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.4f", f), "0"), ".")
+}
+
+// metricList renders a predicted metric set for a human.
+//
+// When grounding matches nothing it falls back to every metric in the model, so
+// one wrong answer printed all forty-four names — thirty-six times over. The
+// count is the finding ("it matched nothing"); the names are noise, and a
+// section nobody can read is a section nobody reads.
+func metricList(ms []string) string {
+	const show = 3
+	if len(ms) == 0 {
+		return "nothing"
+	}
+	if len(ms) <= show {
+		return "[" + strings.Join(ms, " ") + "]"
+	}
+	return fmt.Sprintf("[%s …] (%d metrics — grounding matched nothing)",
+		strings.Join(ms[:show], " "), len(ms))
 }

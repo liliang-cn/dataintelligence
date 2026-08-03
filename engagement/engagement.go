@@ -18,7 +18,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/liliang-cn/dataintelligence/internal/strictyaml"
 )
 
 // Database is one of the customer's databases.
@@ -101,8 +101,8 @@ func Load(path string) (*Engagement, error) {
 	rawVars := dsnVars(string(raw))
 
 	var e Engagement
-	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(raw))), &e); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	if err := strictyaml.Unmarshal(path, []byte(os.ExpandEnv(string(raw))), &e); err != nil {
+		return nil, err
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

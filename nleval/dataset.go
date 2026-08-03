@@ -11,7 +11,7 @@ package nleval
 import (
 	"os"
 
-	"gopkg.in/yaml.v3"
+	"github.com/liliang-cn/dataintelligence/internal/strictyaml"
 )
 
 // Case is one labeled question plus its expected resolution and grading anchors.
@@ -42,7 +42,7 @@ func Load(path string) (*Dataset, error) {
 		return nil, err
 	}
 	var ds Dataset
-	if err := yaml.Unmarshal(b, &ds); err != nil {
+	if err := strictyaml.Unmarshal(path, b, &ds); err != nil {
 		return nil, err
 	}
 	return &ds, nil

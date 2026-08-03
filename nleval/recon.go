@@ -10,7 +10,8 @@ import (
 
 	"github.com/liliang-cn/dataintelligence/engine"
 	semantic "github.com/liliang-cn/semantic-go"
-	"gopkg.in/yaml.v3"
+
+	"github.com/liliang-cn/dataintelligence/internal/strictyaml"
 )
 
 // ReconCase pins one metric to a hand-written control query.
@@ -72,8 +73,8 @@ func LoadReconSet(path string) (*ReconSet, error) {
 		return nil, err
 	}
 	var s ReconSet
-	if err := yaml.Unmarshal(raw, &s); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	if err := strictyaml.Unmarshal(path, raw, &s); err != nil {
+		return nil, err
 	}
 	for i, c := range s.Cases {
 		if c.Metric == "" || c.Control == "" {

@@ -105,3 +105,59 @@ func TestSingularOnlyRenamesMetrics(t *testing.T) {
 		}
 	}
 }
+
+// The generator must find the ratios a plant runs on, not only the ones a shop
+// runs on. This schema has no revenue column anywhere.
+func TestYieldRatiosOnAManufacturingTable(t *testing.T) {
+	cases := []struct {
+		entity string
+		cols   []string
+		want   []string // metric name → formula fragment
+	}{
+		{"melting", []string{"charge_t", "tapped_t", "scrap_t"},
+			[]string{"melting_yield_rate", "melting_scrap_t_rate"}},
+		{"cleaning", []string{"in_qty", "out_qty", "rework_qty"},
+			[]string{"cleaning_yield_rate", "cleaning_rework_qty_rate"}},
+		{"inspection", []string{"checked_qty", "defect_qty"},
+			[]string{"inspection_defect_qty_rate"}},
+	}
+	for _, c := range cases {
+		got := Ratios(Table{Name: c.entity}, c.entity, c.cols)
+		names := map[string]bool{}
+		for _, m := range got {
+			names[m.Name] = true
+			if m.Additivity != semantic.NonAdditive {
+				t.Errorf("%s: %s must be non-additive — a yield summed across plants is the classic wrong number", c.entity, m.Name)
+			}
+		}
+		for _, w := range c.want {
+			if !names[w] {
+				t.Errorf("%s: missing %s, got %v", c.entity, w, keysOf(names))
+			}
+		}
+	}
+}
+
+// The ratio must be dimensionless: pieces over tonnes is a number with no unit,
+// and a number with no unit is how a wrong metric survives review.
+func TestYieldsDoNotDivideAcrossUnits(t *testing.T) {
+	for _, m := range Ratios(Table{Name: "pouring"}, "pouring", []string{"charge_t", "good_qty"}) {
+		t.Errorf("proposed %s = %s across units", m.Name, m.Formula)
+	}
+}
+
+// "in" is a substring of "inspection" and of "line". Matching on substrings
+// proposes ratios between things that were never meant to divide.
+func TestYieldsMatchWholeTokensNotSubstrings(t *testing.T) {
+	for _, m := range Ratios(Table{Name: "batch"}, "batch", []string{"line_id", "inspection_id", "shift_id"}) {
+		t.Errorf("proposed %s = %s from an id column", m.Name, m.Formula)
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

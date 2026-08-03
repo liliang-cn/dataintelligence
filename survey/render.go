@@ -52,6 +52,36 @@ func (r *Report) WriteMarkdown(w io.Writer) {
 		}
 	}
 
+	if len(r.Gaps) > 0 {
+		p("## Parts of a table that stopped while the rest kept going")
+		p("")
+		p("A table-level check cannot see these: the table still moves because the")
+		p("other segments report. The totals are simply missing one.")
+		p("")
+		p("| Table | Segment | Last reported | Periods behind |")
+		p("|---|---|---|---:|")
+		for _, g := range r.Gaps {
+			p("| `%s` | `%s` = %s | %s | %d |", g.Table, g.By, g.Segment, g.Newest, g.Behind)
+		}
+		p("")
+	}
+
+	if len(r.Implied) > 0 {
+		p("## References with no foreign key behind them")
+		p("")
+		p("These columns name another table's key and mostly match it, but nothing")
+		p("enforces that. Cross-system code matching never has a constraint — which")
+		p("is why it drifts, and why the declared-key check above cannot see it.")
+		p("")
+		p("| From | Looks like | Values that do not match |")
+		p("|---|---|---:|")
+		for _, i := range r.Implied {
+			p("| `%s.%s` | `%s.%s` | %s of %s |", i.Table, i.Column, i.RefTable, i.RefColumn,
+				humanInt(i.Orphans), humanInt(i.Total))
+		}
+		p("")
+	}
+
 	if len(r.Orphans) > 0 {
 		p("## Foreign keys the data does not honour")
 		p("")
@@ -119,12 +149,19 @@ func rangeOrValues(c Column) string {
 	return strings.Join(vals, " ")
 }
 
+// truncate cuts by runes, not bytes.
+//
+// Slicing a Go string by byte splits a multi-byte character in half and puts
+// invalid UTF-8 into the document — which is how a survey of a warehouse whose
+// data is Chinese produces a file the customer's own tools refuse to open. A
+// sample value is exactly where non-ASCII shows up first.
 func truncate(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
 
 func orDash(s string) string {

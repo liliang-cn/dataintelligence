@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // The finding most often missed and the most expensive: a source that stopped
@@ -165,5 +166,72 @@ func TestTablesSharingACutoffAreOneFinding(t *testing.T) {
 	}}
 	if strings.Contains(strings.Join(summarise(single), "\n"), "all stop at") {
 		t.Error("a single stale table is not a correlated event")
+	}
+}
+
+// Slicing a Go string by byte splits a multi-byte character in half and writes
+// invalid UTF-8 into the document — which is how a survey of a warehouse whose
+// data is Chinese produces a file the customer's own tools refuse to open.
+// Sample values are exactly where non-ASCII shows up first.
+func TestSampleValuesSurviveTruncation(t *testing.T) {
+	c := Column{Name: "workshop", Sample: []string{
+		"铸造一厂 造型车间 气冲造型线 长春一厂 第一分厂",
+		"锻造 一号锻压车间 12500T 锻压线",
+		"ascii is fine and also long enough to be cut somewhere",
+	}}
+	out := rangeOrValues(c)
+	if !utf8.ValidString(out) {
+		t.Fatalf("truncation produced invalid UTF-8: %q", out)
+	}
+	if !strings.Contains(out, "铸造一厂") {
+		t.Errorf("the readable part should survive: %q", out)
+	}
+}
+
+// The shape the problem takes in a company with several sites: one plant's feed
+// stops, the table keeps moving because the other nine report, and the totals
+// are quietly missing a plant. Table-level staleness cannot see it.
+func TestSegmentsMustNameSomethingRatherThanMeasureIt(t *testing.T) {
+	// Coke tonnage repeats per workshop, so it has few distinct values — and
+	// "coke_t = 382.000 stopped reporting" is not a sentence anyone can act on.
+	for _, c := range []Column{
+		{Name: "coke_t", Type: "numeric", Distinct: 5},
+		{Name: "gas_m3", Type: "numeric", Distinct: 6},
+		{Name: "electricity_kwh", Type: "numeric", Distinct: 12},
+	} {
+		if isSegmentLike(c) {
+			t.Errorf("%s is a measure, not a segment", c.Name)
+		}
+	}
+	for _, c := range []Column{
+		{Name: "workshop_id", Type: "integer", Distinct: 6},
+		{Name: "shift_id", Type: "integer", Distinct: 3},
+		{Name: "plant", Type: "text", Distinct: 4},
+		{Name: "material", Type: "character varying", Distinct: 5},
+	} {
+		if !isSegmentLike(c) {
+			t.Errorf("%s names something and should segment", c.Name)
+		}
+	}
+}
+
+// Periods come from the time column's own distinct count. Dividing the span by
+// the number of segments made a monthly feed look like it reported quarterly,
+// and a plant four months silent then read as one period late — under the
+// threshold, so the finding vanished.
+func TestCadenceComesFromThePeriodsNotTheSegments(t *testing.T) {
+	newest := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	// Two years of monthly data: 25 distinct months.
+	got := CadenceOf(newest, "2024-07-01", 25)
+	if got < 25*24*time.Hour || got > 35*24*time.Hour {
+		t.Errorf("monthly data should give a monthly cadence, got %v", got)
+	}
+	// A daily feed must not make "two periods behind" fire over a weekend.
+	if got := CadenceOf(newest, "2026-06-01", 30); got < 20*24*time.Hour {
+		t.Errorf("cadence should not fall below the floor, got %v", got)
+	}
+	// One period, or an unparseable start, cannot yield a rate.
+	if got := CadenceOf(newest, "", 1); got != 30*24*time.Hour {
+		t.Errorf("fallback = %v", got)
 	}
 }
