@@ -48,6 +48,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/critic"
 	"github.com/liliang-cn/dataintelligence/destinations"
+	"github.com/liliang-cn/dataintelligence/engagement"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -63,6 +64,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/runtime/ui"
 	"github.com/liliang-cn/dataintelligence/spiderbench"
+	"github.com/liliang-cn/dataintelligence/survey"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 	"github.com/liliang-cn/dataintelligence/writeback"
 )
@@ -131,6 +133,7 @@ func rootCmd() *cobra.Command {
 		leaf("exemplar", "model", "Manage the few-shot exemplar bank", runExemplar),
 		leaf("eval", "model", "Reconciliation gate (metrics vs control SQL)", runEval),
 		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
+		leaf("survey", "model", "Site survey: what is actually in a customer's database", runSurvey),
 		leaf("report", "model", "Delivery report: what was modelled and what proves it", runReport),
 		leaf("bench", "model", "Public benchmark (Spider): coverage + correctness", runBench),
 		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
@@ -1032,7 +1035,16 @@ func runEval(argv []string) {
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
 	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
 	recon := fs.String("recon", "", "reconciliation set (default: <model>.recon.yaml)")
+	engFile := fs.String("engagement", "", "take model/dsn/recon from an engagement.yaml")
+	db := fs.String("database", "", "which database in the engagement")
 	_ = fs.Parse(argv)
+
+	if _, m, d, r, _, _, ok := fromEngagement(*engFile, *db); ok {
+		if m == "" {
+			fail(fmt.Errorf("database %q has no semantic model yet — nothing to reconcile", *db))
+		}
+		model, dsn, recon = &m, &d, &r
+	}
 
 	ctx := context.Background()
 	rep, eng, err := reconcileModel(ctx, *model, *dsn, *recon)
@@ -3119,7 +3131,25 @@ func runReport(argv []string) {
 	database := fs.String("database", "", "customer/database name for the heading")
 	out := fs.String("out", "", "write markdown here (default: stdout)")
 	jsonOut := fs.String("json", "", "also write the machine-readable report here")
+	engFile := fs.String("engagement", "", "take everything from an engagement.yaml")
+	dbID := fs.String("db", "", "which database in the engagement")
 	_ = fs.Parse(argv)
+
+	if name, m, ds, r, es, ro, ok := fromEngagement(*engFile, *dbID); ok {
+		if m == "" {
+			fail(fmt.Errorf("database %q has no semantic model yet — run `di survey`, then generate one", *dbID))
+		}
+		model, dsn, recon = &m, &ds, &r
+		if *database == "" {
+			database = &name
+		}
+		if es != "" {
+			set = &es
+		}
+		if *out == "" && ro != "" {
+			out = &ro
+		}
+	}
 
 	ctx := context.Background()
 	d := &nleval.Delivery{Database: *database, Model: *model}
@@ -3177,4 +3207,98 @@ func runReport(argv []string) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "-- %s\n", d.Verdict())
+}
+
+// fromEngagement resolves a database inside an engagement to the paths and DSN
+// the model-facing commands need.
+//
+// Without it every command needs -model -dsn -recon -set spelled out, and a
+// delivery is reproducible only by whoever remembers the flags. With it the
+// engagement file is the reproduction.
+func fromEngagement(engPath, dbID string) (name, model, dsn, recon, evalset, reportOut string, ok bool) {
+	path, err := engagement.Find(engPath)
+	if err != nil {
+		return "", "", "", "", "", "", false
+	}
+	e, err := engagement.Load(path)
+	if err != nil {
+		fail(err)
+	}
+	d, err := e.Database(dbID)
+	if err != nil {
+		fail(err)
+	}
+	return fmt.Sprintf("%s · %s", e.Customer, d.ID), d.Model, d.DSN, d.Recon, e.Evalset, e.Deliver.Report, true
+}
+
+// runSurvey is week one of an engagement: find out what is actually in the
+// customer's database, by looking rather than by asking.
+//
+// The schema diagram is out of date, one feed stopped six months ago, and a
+// third of the foreign keys point at rows that do not exist. None of that shows
+// up in a schema dump, and all of it decides what can be modelled.
+func runSurvey(argv []string) {
+	fs := flag.NewFlagSet("survey", flag.ExitOnError)
+	eng := fs.String("engagement", "", "engagement.yaml (default: nearest one)")
+	db := fs.String("database", "", "which database in the engagement (default: the first)")
+	dsn := fs.String("dsn", "", "survey this DSN directly, ignoring any engagement")
+	out := fs.String("out", "", "write markdown here (default: stdout)")
+	jsonOut := fs.String("json", "", "also write the machine-readable survey here")
+	stale := fs.Duration("stale-after", 60*24*time.Hour, "flag a time column whose newest value is older than this")
+	maxDistinct := fs.Int64("max-distinct", 50, "cap the distinct-value probe per column")
+	skipFK := fs.Bool("skip-orphans", false, "skip referential-integrity probes (the costliest part)")
+	_ = fs.Parse(argv)
+
+	ctx := context.Background()
+	name, target := "", *dsn
+	if target == "" {
+		path, err := engagement.Find(*eng)
+		if err != nil {
+			fail(err)
+		}
+		e, err := engagement.Load(path)
+		if err != nil {
+			fail(err)
+		}
+		d, err := e.Database(*db)
+		if err != nil {
+			fail(err)
+		}
+		name, target = fmt.Sprintf("%s · %s", e.Customer, d.ID), d.DSN
+	}
+
+	// Surveying opens the warehouse without a model on purpose: at this point
+	// nobody has written one, and needing a model to look around would make the
+	// first useful step impossible.
+	wh, err := warehouse.Open(ctx, target, warehouse.Options{MaxRows: 1000})
+	if err != nil {
+		fail(err)
+	}
+	defer wh.Close()
+
+	rep, err := survey.Run(ctx, wh, name, survey.Options{
+		MaxDistinct: *maxDistinct, StaleAfter: *stale, SkipOrphans: *skipFK,
+	})
+	if err != nil {
+		fail(err)
+	}
+
+	var buf strings.Builder
+	rep.WriteMarkdown(&buf)
+	if *out == "" {
+		fmt.Print(buf.String())
+	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
+		fail(err)
+	} else {
+		fmt.Fprintf(os.Stderr, "-- wrote %s\n", *out)
+	}
+	if *jsonOut != "" {
+		b, _ := json.MarshalIndent(rep, "", "  ")
+		if err := os.WriteFile(*jsonOut, b, 0o644); err != nil {
+			fail(err)
+		}
+	}
+	for _, f := range rep.Findings {
+		fmt.Fprintf(os.Stderr, "-- %s\n", f)
+	}
 }

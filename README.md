@@ -111,6 +111,7 @@ Build order is load-bearing: **meaning first, transport last.**
 
 | Area | Capability | Command |
 |---|---|---|
+| Discovery | what is actually in the customer's database | `di survey` |
 | Onboarding | introspect a warehouse → generate a model draft | `di model gen` |
 | Query | governed semantic query → fan-out-safe SQL | `di query`, `POST /v1/query` |
 | NL | ground a question, optionally answer | `di ask`, `POST /v1/ground` `/v1/ask` |
@@ -313,6 +314,77 @@ executive-facing UI.
 
 **DI does not ship an end-user product.** Keeping that line means the engine stays
 domain-neutral and embeddable, instead of growing a second, weaker BI tool inside it.
+
+## One engagement, one file
+
+The rest of this README is organised around a database. An engineer standing up
+a customer is organised around a customer: several databases, a model for each
+one that has been modelled, the reconciliation set that proves it, the labelled
+questions, the report — and what had to be worked around to make this fit.
+
+```yaml
+# engagement.yaml
+customer: Acme Retail
+databases:
+  - id: erp
+    dsn: ${ACME_ERP_DSN}
+    model: models/erp.yaml        # recon defaults to models/erp.recon.yaml
+  - id: pos
+    dsn: ${ACME_POS_DSN}          # not modelled yet — direct SQL only
+evalset: models/questions.yaml
+deliver:
+  report: out/delivery.md
+```
+
+Then the commands take no flags at all:
+
+```bash
+di survey     # week one: what is actually in there
+di eval       # every metric vs its control query
+di report     # the handover document
+```
+
+Paths resolve against the file rather than the working directory, and a
+`${VAR}` the environment does not define is reported by name — an unset DSN
+otherwise surfaces as "database erp needs a dsn", which is true and points at
+the wrong thing. See [`examples/engagement/`](examples/engagement/), and
+[`docs/FDE-ROADMAP.md`](docs/FDE-ROADMAP.md) for where this is going.
+
+## The site survey
+
+Week one is spent discovering that the schema diagram is out of date, one feed
+stopped six months ago, and a third of the foreign keys point at rows that do
+not exist. None of that is in a schema dump, and all of it decides what can be
+modelled.
+
+```bash
+di survey -out survey.md
+```
+
+```
+- 4 tables, 4,540 rows in total
+- 1 table(s) are empty
+- 1 table(s) have no primary key — de-duplication has nothing to key on
+- 1 foreign key(s) are not honoured by the data — 37 orphan row(s);
+  joins on them will drop rows
+
+**legacy_feed** — 500 rows
+- synced_at stops at 2025-11-01 — has this feed stopped?
+
+**orders** — 4,037 rows
+- channel has one value in every row — a constant, not a dimension
+- note is entirely null — nothing can be modelled on it
+```
+
+Every figure comes from a query; nothing is inferred from names. It runs against
+a customer's production database on day one, so the distinct-value probe is
+capped, the referential-integrity checks can be skipped, and a column that
+cannot be profiled is skipped rather than aborting the report.
+
+The finding worth the whole exercise is the stale feed. A source that stopped
+sending leaves every row valid and the totals quietly not growing — nothing
+errors, and a model built on it looks fine until someone asks why last quarter
+is flat.
 
 ## The handover document
 
