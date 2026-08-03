@@ -123,7 +123,11 @@ Build order is load-bearing: **meaning first, transport last.**
 | Rollout | model version registry, canary, auto-rollback | `di rollout` |
 | Service | config-driven daemon, REST /v1 + MCP | `di serve` |
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design and [`deploy/`](deploy/) for Docker / Compose / Helm.
+See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design, [`deploy/`](deploy/) for
+Docker / Compose / Helm, and [`docs/FDE-ROADMAP.md`](docs/FDE-ROADMAP.md) for where
+this is going: the scaffolding a forward-deployed engineer uses to run an
+engagement end to end — survey, model, prove, deliver, hand over, and feed the
+gaps back into the core.
 
 ## Several databases, one process
 
