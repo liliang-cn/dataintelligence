@@ -112,7 +112,7 @@ Build order is load-bearing: **meaning first, transport last.**
 | Area | Capability | Command |
 |---|---|---|
 | Discovery | what is actually in the customer's database | `di survey` |
-| Onboarding | introspect a warehouse → generate a model draft | `di model gen` |
+| Onboarding | introspect a warehouse → generate a model draft, with ratios | `di model gen` |
 | Query | governed semantic query → fan-out-safe SQL | `di query`, `POST /v1/query` |
 | NL | ground a question, optionally answer | `di ask`, `POST /v1/ground` `/v1/ask` |
 | Dialects | same model → Postgres / MySQL / SQLite / SQL Server / Snowflake / Databricks SQL | `di explain -dialect` |
@@ -389,6 +389,36 @@ The finding worth the whole exercise is the stale feed. A source that stopped
 sending leaves every row valid and the totals quietly not growing — nothing
 errors, and a model built on it looks fine until someone asks why last quarter
 is flat.
+
+## What the draft proposes
+
+`di model gen` produces sums, and — where one table holds both sides of the
+question — the ratios people actually ask for:
+
+```
+sale_gross_margin             = (sale_revenue_sum - sale_cogs_amount_sum) / sale_revenue_sum
+sale_revenue_per_transaction  = sale_revenue_sum / sale_transactions_sum
+sale_revenue_per_unit         = sale_revenue_sum / sale_units_sum
+```
+
+Nobody asks for "sum of revenue and sum of cost"; they ask for margin. A draft
+made only of sums stops just short of the questions, and reads as unfinished
+because it is.
+
+Every proposal is **non-additive**, which is the part that matters: a margin
+summed across regions, or averaged from monthly averages, is the classic wrong
+number, and declaring it lets the compiler refuse.
+
+Two limits, both deliberate:
+
+- **Same table only.** Both operands share a grain, so the ratio is arithmetic
+  rather than a join whose correctness depends on cardinality. A cross-table
+  ratio — loss in one fact table over revenue in another — is a decision about
+  which pairing means something, and guessing produces plausible metrics nobody
+  asked for. Those stay hand-written.
+- **Matched on names.** No column announces that it is a cost. The meaning is in
+  the name and nowhere else, so this is explicitly a draft: every description
+  says to confirm it is the margin the business means.
 
 ## Day 2 — the day after you leave
 

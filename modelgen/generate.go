@@ -71,6 +71,7 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 			Synonyms:    []string{ent + " count", "number of " + t.Name}, Additivity: semantic.NonAdditive,
 		})
 
+		var measures []string // the numeric columns that are actually measures
 		for _, c := range t.Columns {
 			if key[c.Name] {
 				continue // keys are join columns, not dims/metrics
@@ -97,6 +98,7 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 					})
 					continue
 				}
+				measures = append(measures, c.Name)
 				m.Metrics = append(m.Metrics, semantic.Metric{
 					Name: ent + "_" + c.Name + "_sum", Entity: ent, Agg: "sum", Expr: c.Name,
 					Description: fmt.Sprintf("Sum of %s.%s (auto-generated; confirm it is additive).", t.Name, c.Name),
@@ -104,6 +106,11 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 				})
 			}
 		}
+		// The ratios come last so their formulas can reference the sums above.
+		// A draft made only of sums stops just short of the questions people
+		// actually ask: nobody wants "sum of revenue and sum of cost", they
+		// want margin.
+		m.Metrics = append(m.Metrics, Ratios(t, ent, measures)...)
 	}
 	if len(m.Entities) == 0 {
 		return nil, fmt.Errorf("no modelable tables found (need a primary key)")
