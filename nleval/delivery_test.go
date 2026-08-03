@@ -21,12 +21,25 @@ func TestVerdictDistinguishesUncheckedFromVerified(t *testing.T) {
 			Metrics: 3, Recon: &ReconReport{Total: 3, Passed: 2},
 		}, "FAILING"},
 		{"all checked pass, some unchecked", Delivery{
-			Metrics: 8, Recon: &ReconReport{Total: 4, Passed: 4},
+			Metrics: 8, Recon: &ReconReport{Total: 4, Passed: 4, Anchored: 2},
 			Uncovered: []string{"a", "b", "c", "d"},
 		}, "PARTIAL"},
-		{"everything covered and passing", Delivery{
-			Metrics: 4, Recon: &ReconReport{Total: 4, Passed: 4},
+		// Everything agrees and nothing was checked against anything outside the
+		// model. If one person wrote both the metric and its control query from
+		// the same misunderstanding, they agree — and agreement is not
+		// correctness. Calling this "verified" is the lie the report exists to
+		// avoid.
+		{"all agree, none anchored", Delivery{
+			Metrics: 4, Recon: &ReconReport{Total: 4, Passed: 4, Anchored: 0},
+		}, "SELF-CONSISTENT"},
+		{"everything covered, passing and anchored", Delivery{
+			Metrics: 4, Recon: &ReconReport{Total: 4, Passed: 4, Anchored: 3},
 		}, "VERIFIED"},
+		// Two gaps at once: neither may hide the other.
+		{"unchecked and unanchored", Delivery{
+			Metrics: 3, Recon: &ReconReport{Total: 1, Passed: 1, Anchored: 0},
+			Uncovered: []string{"a", "b"},
+		}, "PARTIAL"},
 	} {
 		if got := tc.d.Verdict(); !strings.HasPrefix(got, tc.want) {
 			t.Errorf("%s: verdict = %q, want it to start with %q", tc.name, got, tc.want)
@@ -91,6 +104,43 @@ func TestNumIsReadableNextToAnotherNumber(t *testing.T) {
 	} {
 		if got := Num(in); got != want {
 			t.Errorf("Num(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A reader has to be able to tell, per metric, whether the expected figure came
+// from the customer or from the engineer who wrote the metric.
+func TestReportNamesTheAnchorPerMetric(t *testing.T) {
+	d := Delivery{
+		Database: "acme", Model: "m.yaml", Metrics: 2,
+		Recon: &ReconReport{Total: 2, Passed: 2, Anchored: 1, Results: []ReconResult{
+			{Metric: "revenue", Got: 10, Want: 10, Pass: true, Source: SourceCustomerReport, Anchored: true},
+			{Metric: "orders", Got: 5, Want: 5, Pass: true, Source: SourceEngineer},
+		}},
+	}
+	var b strings.Builder
+	d.WriteMarkdown(&b)
+	out := b.String()
+
+	for _, want := range []string{"customer report", "*derived*", "1 of 2 controls have no external anchor"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report should contain %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestAnchorLabel(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{SourceCustomerReport, "customer report"},
+		{SourceCustomerSystem, "customer system"},
+		{SourceEngineer, "*derived*"},
+		// An unrecorded source is not the same as a derived one, and must not
+		// be presented as either an anchor or a derivation.
+		{"", "*unrecorded*"},
+		{"the finance team's spreadsheet", "the finance team's spreadsheet"},
+	} {
+		if got := anchorLabel(ReconResult{Source: tc.src}); got != tc.want {
+			t.Errorf("anchorLabel(%q) = %q, want %q", tc.src, got, tc.want)
 		}
 	}
 }

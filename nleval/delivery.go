@@ -66,19 +66,43 @@ func (d *Delivery) Describe(m *semantic.Model) {
 // 0/0 pass. A model nobody checked and a model that checked out must not print
 // the same word.
 func (d *Delivery) Verdict() string {
-	switch {
-	case d.Recon == nil || d.Recon.Total == 0:
+	if d.Recon == nil || d.Recon.Total == 0 {
 		return "NOT VERIFIED — no metric has a control query"
-	case d.Recon.Passed < d.Recon.Total:
+	}
+	if d.Recon.Passed < d.Recon.Total {
 		return fmt.Sprintf("FAILING — %d of %d metrics disagree with their control query",
 			d.Recon.Total-d.Recon.Passed, d.Recon.Total)
-	case len(d.Uncovered) > 0:
-		return fmt.Sprintf("PARTIAL — %d/%d metrics reconcile, %d have no control query",
-			d.Recon.Passed, d.Metrics, len(d.Uncovered))
-	default:
-		return fmt.Sprintf("VERIFIED — all %d metrics reconcile with a hand-written control query",
-			d.Recon.Passed)
 	}
+
+	// Coverage and anchoring are separate gaps and neither may hide the other.
+	// "Half the metrics are unchecked" and "nothing was checked against anything
+	// outside the model" are both true of the same report, and a reader who is
+	// told only one of them has been misled by omission.
+	var gaps []string
+	if len(d.Uncovered) > 0 {
+		gaps = append(gaps, fmt.Sprintf("%d have no control query", len(d.Uncovered)))
+	}
+	if d.Recon.Anchored == 0 {
+		gaps = append(gaps, "none is anchored to a customer figure")
+	} else if d.Recon.Anchored < d.Recon.Total {
+		gaps = append(gaps, fmt.Sprintf("%d of %d anchored to customer figures", d.Recon.Anchored, d.Recon.Total))
+	}
+
+	label := "VERIFIED"
+	switch {
+	case len(d.Uncovered) > 0:
+		label = "PARTIAL"
+	case d.Recon.Anchored == 0:
+		// Everything agrees, and only with itself. If one person wrote both the
+		// metric and its control query from the same misunderstanding, they
+		// agree — and agreement is not correctness.
+		label = "SELF-CONSISTENT"
+	}
+	head := fmt.Sprintf("%s — %d/%d metrics reconcile", label, d.Recon.Passed, d.Metrics)
+	if len(gaps) == 0 {
+		return head
+	}
+	return head + ", " + strings.Join(gaps, ", ")
 }
 
 // WriteMarkdown renders the handover document.
@@ -122,17 +146,30 @@ func (d *Delivery) WriteMarkdown(w io.Writer) {
 		p("Every metric computed through the semantic layer, then again with a control")
 		p("query written by hand. They must agree.")
 		p("")
-		p("| Metric | Semantic layer | Control | |")
-		p("|---|---:|---:|---|")
+		p("Where the expected figure came from matters as much as whether it")
+		p("matched. A control query derived from the same schema by the same person")
+		p("proves the model is self-consistent; only a figure the customer already")
+		p("publishes proves it is right.")
+		p("")
+		p("| Metric | Semantic layer | Control | Anchor | |")
+		p("|---|---:|---:|---|---|")
 		for _, r := range d.Recon.Results {
+			anchor := anchorLabel(r)
 			switch {
 			case r.Error != "":
-				p("| `%s` | — | — | ✗ %s |", r.Metric, oneLine(r.Error))
+				p("| `%s` | — | — | %s | ✗ %s |", r.Metric, anchor, oneLine(r.Error))
 			case r.Pass:
-				p("| `%s` | %s | %s | ✓ |", r.Metric, Num(r.Got), Num(r.Want))
+				p("| `%s` | %s | %s | %s | ✓ |", r.Metric, Num(r.Got), Num(r.Want), anchor)
 			default:
-				p("| `%s` | %s | %s | **✗ differs** |", r.Metric, Num(r.Got), Num(r.Want))
+				p("| `%s` | %s | %s | %s | **✗ differs** |", r.Metric, Num(r.Got), Num(r.Want), anchor)
 			}
+		}
+		if d.Recon.Anchored < d.Recon.Total {
+			p("")
+			p("**%d of %d controls have no external anchor.** Those check that the model",
+				d.Recon.Total-d.Recon.Anchored, d.Recon.Total)
+			p("agrees with itself. To turn them into evidence, replace the expected value")
+			p("with a figure the customer already publishes and record where it came from.")
 		}
 		for _, r := range d.Recon.Results {
 			if r.Note != "" {
@@ -192,6 +229,22 @@ func (d *Delivery) WriteMarkdown(w io.Writer) {
 	p("---")
 	p("")
 	p("Reproduce: `di report -model %s -dsn <dsn>`", d.Model)
+}
+
+// anchorLabel names the provenance of the expected figure, in the reader's terms.
+func anchorLabel(r ReconResult) string {
+	switch r.Source {
+	case SourceCustomerReport:
+		return "customer report"
+	case SourceCustomerSystem:
+		return "customer system"
+	case SourceEngineer:
+		return "*derived*"
+	case "":
+		return "*unrecorded*"
+	default:
+		return r.Source
+	}
 }
 
 func orDash(s string) string {

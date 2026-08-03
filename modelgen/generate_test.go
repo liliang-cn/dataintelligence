@@ -113,3 +113,67 @@ func hasJoin(m *semantic.Model, from, to string) bool {
 	}
 	return false
 }
+
+// The first live run of `di model gen` offered "sum of store_id" and "sum of
+// sku". Both are meaningless, and both make every other generated metric look
+// equally unconsidered to the customer they are shown to. The declared-key
+// check misses them whenever the foreign key was never declared, which is the
+// normal state of a warehouse loaded by ETL.
+func TestIdentifierColumnsAreDimensionsNotMeasures(t *testing.T) {
+	for _, name := range []string{"id", "store_id", "sku", "customer_uuid", "region_key", "product_code"} {
+		if !looksLikeIdentifier(name) {
+			t.Errorf("%q should be treated as an identifier", name)
+		}
+	}
+	// Dropping a real measure is worse than leaving one identifier in: a
+	// missing metric is invisible, a silly one is not. So the ambiguous
+	// suffixes stay out of the list.
+	for _, name := range []string{"amount", "qty", "unit_price", "item_num", "order_no", "cost"} {
+		if looksLikeIdentifier(name) {
+			t.Errorf("%q is a measure, not an identifier", name)
+		}
+	}
+}
+
+func TestHeuristicModelPutsUndeclaredKeysInDimensions(t *testing.T) {
+	schema := &Schema{Tables: []Table{{
+		Name: "orders", PrimaryKey: "order_id",
+		Columns: []Column{
+			{Name: "order_id", Type: "bigint"},
+			{Name: "store_id", Type: "int"},   // no declared FK — the common case
+			{Name: "amount", Type: "decimal"}, // a real measure
+		},
+	}}}
+	m, err := HeuristicModel(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metrics, dims []string
+	for i := range m.Metrics {
+		metrics = append(metrics, m.Metrics[i].Name)
+	}
+	for i := range m.Dimensions {
+		dims = append(dims, m.Dimensions[i].Name)
+	}
+	for _, bad := range metrics {
+		if bad == "order_store_id_sum" {
+			t.Errorf("store_id became a metric: %v", metrics)
+		}
+	}
+	if !has(metrics, "order_amount_sum") {
+		t.Errorf("the real measure is missing: %v", metrics)
+	}
+	// It is still worth grouping by: an identifier is a dimension, not nothing.
+	if !has(dims, "order_store_id") {
+		t.Errorf("store_id should be a dimension: %v", dims)
+	}
+}
+
+func has(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

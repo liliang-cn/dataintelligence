@@ -85,6 +85,18 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 					Name: dimName(ent, c.Name), Entity: ent, Column: c.Name, Type: "categorical",
 				})
 			case kindNumeric:
+				// A numeric column that names an identifier is something you
+				// group by, not something you add up. The declared-key check
+				// above misses these whenever the foreign key was never declared
+				// — common in warehouses loaded by ETL — and the draft then
+				// offers "sum of store_id", which is meaningless and, worse,
+				// makes every other generated metric look equally unconsidered.
+				if looksLikeIdentifier(c.Name) {
+					m.Dimensions = append(m.Dimensions, semantic.Dimension{
+						Name: dimName(ent, c.Name), Entity: ent, Column: c.Name, Type: "categorical",
+					})
+					continue
+				}
 				m.Metrics = append(m.Metrics, semantic.Metric{
 					Name: ent + "_" + c.Name + "_sum", Entity: ent, Agg: "sum", Expr: c.Name,
 					Description: fmt.Sprintf("Sum of %s.%s (auto-generated; confirm it is additive).", t.Name, c.Name),
@@ -162,6 +174,26 @@ const (
 	kindText
 	kindNumeric
 )
+
+// looksLikeIdentifier reports whether a numeric column names a key rather than
+// a measure.
+//
+// Only unambiguous suffixes are listed. "_no" and "_num" are deliberately left
+// out: item_num is a quantity as often as order_no is an identifier, and
+// dropping a real measure from the draft is worse than leaving one identifier
+// in — a missing metric is invisible, a silly one is not.
+func looksLikeIdentifier(name string) bool {
+	n := strings.ToLower(name)
+	if n == "id" || n == "sku" || n == "uuid" || n == "guid" {
+		return true
+	}
+	for _, suffix := range []string{"_id", "_uuid", "_guid", "_key", "_fk", "_code"} {
+		if strings.HasSuffix(n, suffix) {
+			return true
+		}
+	}
+	return false
+}
 
 // kindOf classifies an information_schema data_type. It has to span engines:
 // Postgres says "timestamp without time zone" / "character varying" / "numeric",

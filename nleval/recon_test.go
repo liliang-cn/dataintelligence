@@ -52,3 +52,23 @@ func TestCloseEnoughUsesRelativeTolerance(t *testing.T) {
 		t.Error("zero equals zero")
 	}
 }
+
+// A control the engineer derived and one the customer publishes are both worth
+// having. Counting them as the same thing is what turns verification into
+// theatre.
+func TestAnchoredDistinguishesProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		want   bool
+	}{
+		{SourceCustomerReport, true},
+		{SourceCustomerSystem, true},
+		{SourceEngineer, false},
+		{"", false}, // unrecorded is not an anchor
+		{"finance spreadsheet", true},
+	} {
+		if got := (ReconCase{Source: tc.source}).Anchored(); got != tc.want {
+			t.Errorf("Anchored(%q) = %v, want %v", tc.source, got, tc.want)
+		}
+	}
+}

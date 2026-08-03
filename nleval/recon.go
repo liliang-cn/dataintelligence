@@ -20,11 +20,38 @@ import (
 // A control query written by a person who knows the business is the only thing
 // that can say so — the compiler cannot check itself.
 type ReconCase struct {
-	Metric  string  `yaml:"metric"`
-	Control string  `yaml:"control"` // SQL returning one scalar
-	Note    string  `yaml:"note"`    // why this definition, in the customer's words
-	Tol     float64 `yaml:"tol"`     // relative tolerance; 0 → 1e-6
+	Metric  string `yaml:"metric"`
+	Control string `yaml:"control"` // SQL returning one scalar
+	Note    string `yaml:"note"`    // why this definition, in the customer's words
+
+	// Source is where the expected number came from. It is the difference
+	// between verification and theatre.
+	//
+	// If the control query is written by whoever wrote the metric, from the same
+	// misunderstanding, the two agree — and agreement is not correctness. A
+	// control anchored to a figure the customer already publishes is evidence;
+	// one the engineer derived from the same schema is a consistency check.
+	// Both are worth having. Reporting them as the same thing is not.
+	//
+	//   customer-report   a number the customer publishes (name it in note)
+	//   customer-system   read from another system they trust
+	//   engineer          derived from the schema — no external anchor
+	Source string  `yaml:"source"`
+	Tol    float64 `yaml:"tol"` // relative tolerance; 0 → 1e-6
 }
+
+// Anchored reports whether this case is tied to something outside the model.
+func (c ReconCase) Anchored() bool {
+	return c.Source != "" && c.Source != SourceEngineer
+}
+
+// Recognised sources. Anything else is treated as an anchor, since a value
+// nobody recognised is more likely a customer system than a slip.
+const (
+	SourceCustomerReport = "customer-report"
+	SourceCustomerSystem = "customer-system"
+	SourceEngineer       = "engineer"
+)
 
 // ReconSet is the reconciliation contract for one semantic model.
 //
@@ -64,13 +91,15 @@ func ReconPathFor(modelPath string) string {
 
 // ReconResult is one metric's outcome.
 type ReconResult struct {
-	Metric  string  `json:"metric"`
-	Control string  `json:"control"`
-	Note    string  `json:"note,omitempty"`
-	Got     float64 `json:"got"`
-	Want    float64 `json:"want"`
-	Pass    bool    `json:"pass"`
-	Error   string  `json:"error,omitempty"`
+	Metric   string  `json:"metric"`
+	Control  string  `json:"control"`
+	Note     string  `json:"note,omitempty"`
+	Source   string  `json:"source,omitempty"`
+	Anchored bool    `json:"anchored"`
+	Got      float64 `json:"got"`
+	Want     float64 `json:"want"`
+	Pass     bool    `json:"pass"`
+	Error    string  `json:"error,omitempty"`
 }
 
 // ReconReport is the whole reconciliation run.
@@ -80,6 +109,7 @@ type ReconReport struct {
 	Passed   int           `json:"passed"`
 	Declared int           `json:"declared_metrics"` // metrics in the model
 	Covered  int           `json:"covered_metrics"`  // metrics with a control query
+	Anchored int           `json:"anchored"`         // covered by a customer figure, not a derivation
 }
 
 // Uncovered lists model metrics with no control query. Coverage is reported
@@ -108,7 +138,11 @@ func Reconcile(ctx context.Context, eng *engine.Engine, set *ReconSet) (*ReconRe
 	}
 	rep := &ReconReport{Declared: len(eng.Model.Metrics)}
 	for _, c := range set.Cases {
-		res := ReconResult{Metric: c.Metric, Control: c.Control, Note: c.Note}
+		res := ReconResult{Metric: c.Metric, Control: c.Control, Note: c.Note,
+			Source: c.Source, Anchored: c.Anchored()}
+		if res.Anchored {
+			rep.Anchored++
+		}
 		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.Metric}})
 		if err != nil {
 			res.Error = err.Error()

@@ -416,7 +416,8 @@ and the reader finds the holes later anyway — at a worse moment. `PARTIAL` and
 `VERIFIED` are different words for a reason: six checks over ten metrics is not
 the same claim as six over six.
 
-Reconciliation cases are **data**, beside the model:
+Reconciliation cases are **data**, beside the model — and each one records where
+its expected figure came from:
 
 ```yaml
 # models/shop.recon.yaml
@@ -424,8 +425,27 @@ cases:
   - metric: net_revenue
     control: SELECT (SELECT sum(quantity*unit_price) FROM order_items)
                   - (SELECT sum(refund_amount) FROM refunds)
+    source: customer-report      # their Q2 board pack, page 3
     note: Revenue net of refunds — two tables at different grains.
+
+  - metric: order_qty_sum
+    control: SELECT sum(quantity) FROM order_items
+    source: engineer             # derived from the schema — no external anchor
 ```
+
+`source` is the difference between verification and theatre. A control query
+written by whoever wrote the metric, from the same misunderstanding, agrees with
+it — and agreement is not correctness. So a report where nothing is anchored
+says **SELF-CONSISTENT**, not VERIFIED:
+
+```
+VERIFIED         5/5 metrics reconcile, 2 of 5 anchored to customer figures
+SELF-CONSISTENT  5/5 metrics reconcile, none is anchored to a customer figure
+PARTIAL          2/5 metrics reconcile, 3 have no control query, 1 of 2 anchored
+```
+
+Coverage and anchoring are separate gaps and neither hides the other: a reader
+told only one of them has been misled by omission.
 
 They used to be Go code listing one example's metrics, which meant standing up a
 new customer produced a green check for metrics that customer does not have.
