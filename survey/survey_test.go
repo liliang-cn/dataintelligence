@@ -124,3 +124,46 @@ func contains(list []string, sub string) bool {
 	}
 	return false
 }
+
+// Ten shops that last opened in 2022 is a chain that stopped expanding, not a
+// broken feed. A survey that says otherwise teaches the reader to skim the
+// section it most needs them to read.
+func TestTinyTablesDoNotGetStalenessFindings(t *testing.T) {
+	var opts Options
+	opts.withDefaults()
+	old := Column{Name: "open_date", Max: "2022-08-01"}
+
+	if got := old.findings(10, opts); contains(got, "feed stopped") {
+		t.Errorf("a 10-row table has no cadence to be late against: %v", got)
+	}
+	if got := old.findings(1440, opts); !contains(got, "feed stopped") {
+		t.Errorf("a table with real cadence should still be flagged: %v", got)
+	}
+}
+
+// Four tables ending on one day is one event. Reported per table it reads as
+// four unrelated problems and sends somebody looking in four wrong places.
+func TestTablesSharingACutoffAreOneFinding(t *testing.T) {
+	r := &Report{Tables: []Table{
+		{Name: "sales", Rows: 1440, Columns: []Column{{Name: "month", Max: "2025-12-01"}}},
+		{Name: "shrinkage", Rows: 1440, Columns: []Column{{Name: "month", Max: "2025-12-01"}}},
+		{Name: "overheads", Rows: 240, Columns: []Column{{Name: "month", Max: "2025-12-01"}}},
+		// Below the cadence threshold: not part of the event.
+		{Name: "stores", Rows: 10, Columns: []Column{{Name: "open_date", Max: "2025-12-01"}}},
+	}}
+	got := strings.Join(summarise(r), "\n")
+	if !strings.Contains(got, "3 tables all stop at 2025-12-01") {
+		t.Errorf("the shared cutoff should be one finding:\n%s", got)
+	}
+	if strings.Contains(got, "stores") {
+		t.Errorf("a 10-row table should not join the event:\n%s", got)
+	}
+
+	// One table stopping is not an event; do not phrase it as one.
+	single := &Report{Tables: []Table{
+		{Name: "sales", Rows: 1440, Columns: []Column{{Name: "month", Max: "2025-12-01"}}},
+	}}
+	if strings.Contains(strings.Join(summarise(single), "\n"), "all stop at") {
+		t.Error("a single stale table is not a correlated event")
+	}
+}

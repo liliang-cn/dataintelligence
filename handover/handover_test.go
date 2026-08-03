@@ -226,3 +226,33 @@ func TestAsTimeAcceptsWhatDriversActuallyReturn(t *testing.T) {
 		t.Error("a number is not a timestamp")
 	}
 }
+
+// The Day 2 check must group a shared cutoff the same way the survey does —
+// and it must use the survey's threshold rather than its own copy, since two
+// copies of "is this stale" drift apart and the one running every morning is
+// the one whose false alarms teach people to ignore it.
+func TestDriftGroupsFeedsThatStoppedTogether(t *testing.T) {
+	d := &Drift{StaleFeeds: []StaleFeed{
+		{Dimension: "sale_month", Newest: "2025-12-01", Days: 245},
+		{Dimension: "shrinkage_month", Newest: "2025-12-01", Days: 245},
+		{Dimension: "overhead_month", Newest: "2025-12-01", Days: 245},
+		{Dimension: "employee_hire_date", Newest: "2023-12-05", Days: 972},
+	}}
+	if !strings.Contains(d.Summary(), "3 feeds all stopped on 2025-12-01") {
+		t.Errorf("summary should group the shared cutoff: %q", d.Summary())
+	}
+
+	var b strings.Builder
+	d.WriteText(&b)
+	out := b.String()
+	// It appears in the summary line and once in the detail, not once per feed.
+	for _, grouped := range []string{"sale_month stops at", "shrinkage_month stops at", "overhead_month stops at"} {
+		if strings.Contains(out, grouped) {
+			t.Errorf("%q should have been folded into the shared-cutoff line:\n%s", grouped, out)
+		}
+	}
+	// The unrelated one still gets its own line.
+	if !strings.Contains(out, "employee_hire_date") {
+		t.Errorf("an unrelated stale feed should still be listed:\n%s", out)
+	}
+}

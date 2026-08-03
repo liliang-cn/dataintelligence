@@ -168,6 +168,18 @@ func (c *Column) profile(ctx context.Context, wh *warehouse.Warehouse, q func(st
 	}
 }
 
+// MinRowsForCadence is exported so the Day 2 check uses the same judgement as
+// the survey. Two copies of "is this feed stale" would drift apart, and the one
+// that runs on a schedule is the one whose false alarms teach people to ignore
+// it.
+const MinRowsForCadence = minRowsForCadence
+
+// minRowsForCadence is the point below which "nothing new in a while" stops
+// meaning anything. Ten stores that last opened in 2022 is a chain that stopped
+// expanding, not a broken feed — and a survey that says otherwise teaches the
+// reader to skim the section it most needs them to read.
+const minRowsForCadence = 30
+
 func (c *Column) findings(rows int64, opts Options) []string {
 	var out []string
 	switch {
@@ -181,7 +193,7 @@ func (c *Column) findings(rows int64, opts Options) []string {
 	}
 	// The finding most often missed, and the most expensive: a source that
 	// stopped sending. Every row is valid; the totals quietly stop growing.
-	if c.Max != "" {
+	if c.Max != "" && rows >= minRowsForCadence {
 		if newest, ok := parseTime(c.Max); ok && time.Since(newest) > opts.StaleAfter {
 			out = append(out, fmt.Sprintf("%s stops at %s — has this feed stopped?", c.Name, c.Max))
 		}
@@ -230,6 +242,14 @@ func summarise(r *Report) []string {
 	if keyless > 0 {
 		out = append(out, fmt.Sprintf("%d table(s) have no primary key — de-duplication and distinct counts have nothing to key on", keyless))
 	}
+	// Several tables ending on the same day is one event, not several findings.
+	// Reported per-table it reads as four unrelated problems; reported once it
+	// reads as what it is — a load that stopped, or a cutover nobody mentioned.
+	if date, tables := sharedCutoff(r); len(tables) > 1 {
+		out = append(out, fmt.Sprintf(
+			"%d tables all stop at %s: %s — one event, not %d problems. A load that stopped, or a migration nobody mentioned?",
+			len(tables), date, strings.Join(tables, ", "), len(tables)))
+	}
 	if n := len(r.Orphans); n > 0 {
 		var rows int64
 		for _, o := range r.Orphans {
@@ -240,6 +260,40 @@ func summarise(r *Report) []string {
 		out = append(out, fmt.Sprintf("%d foreign key(s) are not honoured by the data — %s orphan row(s); joins on them will drop rows", n, humanInt(rows)))
 	}
 	return out
+}
+
+// sharedCutoff finds a date several tables stop at.
+func sharedCutoff(r *Report) (string, []string) {
+	byDate := map[string][]string{}
+	for _, t := range r.Tables {
+		if t.Rows < minRowsForCadence {
+			continue
+		}
+		newest := ""
+		for _, c := range t.Columns {
+			if c.Max > newest {
+				newest = c.Max
+			}
+		}
+		if day := dayOf(newest); day != "" {
+			byDate[day] = append(byDate[day], t.Name)
+		}
+	}
+	bestDate, best := "", []string(nil)
+	for day, tables := range byDate {
+		if len(tables) > len(best) {
+			bestDate, best = day, tables
+		}
+	}
+	sort.Strings(best)
+	return bestDate, best
+}
+
+func dayOf(s string) string {
+	if t, ok := parseTime(s); ok {
+		return t.Format("2006-01-02")
+	}
+	return ""
 }
 
 // ── engine differences ───────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/nleval"
+	"github.com/liliang-cn/dataintelligence/survey"
 )
 
 // Drift is what changed underneath the model since it was delivered.
@@ -152,6 +153,14 @@ func staleFeeds(ctx context.Context, eng *engine.Engine, tableOf map[string]stri
 		if cols, ok := live[strings.ToLower(table)]; !ok || !cols[strings.ToLower(dim.Column)] {
 			continue
 		}
+		// A date that records an event — when a shop opened, when someone was
+		// hired — is not a feed. Ten shops that last opened in 2022 is a chain
+		// that stopped expanding, and reporting it every morning is how a
+		// scheduled check earns the right to be ignored. Same threshold the
+		// survey uses, from the same constant, so the two cannot drift apart.
+		if rowsIn(ctx, eng, table) < survey.MinRowsForCadence {
+			continue
+		}
 		q := eng.Dialect
 		res, err := eng.WH.Query(ctx, fmt.Sprintf("SELECT MAX(%s) FROM %s",
 			q.QuoteIdent(dim.Column), q.QuoteIdent(table)))
@@ -171,6 +180,21 @@ func staleFeeds(ctx context.Context, eng *engine.Engine, tableOf map[string]stri
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Days > out[j].Days })
 	return out
+}
+
+func rowsIn(ctx context.Context, eng *engine.Engine, table string) int64 {
+	res, err := eng.WH.Query(ctx, "SELECT count(*) FROM "+eng.Dialect.QuoteIdent(table))
+	if err != nil || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	switch v := res.Rows[0][0].(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	default:
+		return 0
+	}
 }
 
 func asTime(v any) (time.Time, bool) {
@@ -211,7 +235,11 @@ func (d *Drift) Summary() string {
 		parts = append(parts, fmt.Sprintf("%d column(s) gone", n))
 	}
 	if n := len(d.StaleFeeds); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d feed(s) stopped", n))
+		if day, feeds := d.sharedCutoff(); len(feeds) > 1 {
+			parts = append(parts, fmt.Sprintf("%d feeds all stopped on %s", len(feeds), day))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d feed(s) stopped", n))
+		}
 	}
 	if n := len(d.Failing); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d metric(s) no longer match their control", n))
@@ -234,7 +262,17 @@ func (d *Drift) WriteText(w interface{ Write([]byte) (int, error) }) {
 	for _, c := range d.MissingColumns {
 		p("  %s.%s is gone, used by %s — every query grouping on it now fails", c.Table, c.Column, c.UsedBy)
 	}
+	if day, feeds := d.sharedCutoff(); len(feeds) > 1 {
+		// Several feeds ending on one day is one event. Listed separately it
+		// reads as several unrelated problems and sends somebody looking in
+		// several wrong places.
+		p("  %d feeds all stop at %s: %s — one event. A load that stopped, or a migration?",
+			len(feeds), day, strings.Join(feeds, ", "))
+	}
 	for _, s := range d.StaleFeeds {
+		if _, feeds := d.sharedCutoff(); len(feeds) > 1 && contains(feeds, s.Dimension) {
+			continue
+		}
 		p("  %s stops at %s (%d days ago) — totals over it are quietly no longer growing", s.Dimension, s.Newest, s.Days)
 	}
 	for _, f := range d.Failing {
@@ -244,6 +282,22 @@ func (d *Drift) WriteText(w interface{ Write([]byte) (int, error) }) {
 		}
 		p("  %s = %s, its control says %s%s", f.Metric, nleval.Num(f.Got), nleval.Num(f.Want), anchorNote(f.Source))
 	}
+}
+
+// sharedCutoff groups feeds that stopped on the same day.
+func (d *Drift) sharedCutoff() (string, []string) {
+	byDay := map[string][]string{}
+	for _, s := range d.StaleFeeds {
+		byDay[s.Newest] = append(byDay[s.Newest], s.Dimension)
+	}
+	bestDay, best := "", []string(nil)
+	for day, feeds := range byDay {
+		if len(feeds) > len(best) {
+			bestDay, best = day, feeds
+		}
+	}
+	sort.Strings(best)
+	return bestDay, best
 }
 
 func anchorNote(source string) string {
