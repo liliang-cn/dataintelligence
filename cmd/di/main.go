@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -44,6 +45,7 @@ import (
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/spf13/cobra"
 
+	"github.com/liliang-cn/dataintelligence/anchor"
 	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/convo"
@@ -138,6 +140,9 @@ func rootCmd() *cobra.Command {
 		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
 		leaf("survey", "model", "Site survey: what is actually in a customer's database", runSurvey),
 		leaf("report", "model", "Delivery report: what was modelled and what proves it", runReport),
+		leaf("package", "model", "Pack the engagement into a signed, reproducible handover archive", runPackage),
+		leaf("questions", "model", "Mine the audit trail for the questions people actually asked", runQuestions),
+		leaf("anchor", "model", "Find which scope of a metric reproduces a figure the customer publishes", runAnchor),
 		leaf("handover", "model", "Day 2: runbook + CI gate for the customer's team", runHandover),
 		leaf("drift", "model", "Has anything changed underneath the model?", runDrift),
 		leaf("adoption", "model", "Who is using this, and what nobody ever asks for", runAdoption),
@@ -286,7 +291,7 @@ func runServe(argv []string) {
 
 	// One parent mux: stable /v1 data-plane API + the existing control-plane API
 	// + the embedded web console at /ui.
-	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier}
+	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
 	if eng == nil {
@@ -3135,6 +3140,222 @@ func fail(err error) {
 // YAML file and a dashboard, and nobody — including you — can say whether the
 // numbers are right. Both gates that answer that already run in CI; nothing
 // rendered them as one document for the person paying for it.
+// runPackage turns a finished engagement into something that can be handed over.
+func runPackage(argv []string) {
+	fs := flag.NewFlagSet("package", flag.ExitOnError)
+	engFile := fs.String("engagement", "", "engagement.yaml (default: found by walking up)")
+	out := fs.String("out", "", "archive path (default: <customer>.tar.gz beside the engagement)")
+	_ = fs.Parse(argv)
+
+	path, err := engagement.Find(*engFile)
+	if err != nil {
+		fail(err)
+	}
+	e, err := engagement.Load(path)
+	if err != nil {
+		fail(err)
+	}
+	if *out == "" {
+		*out = filepath.Join(e.Dir(), slug(e.Customer)+".tar.gz")
+	}
+	p, err := handover.Build(e, *out)
+	if err != nil {
+		fail(err)
+	}
+	fmt.Print(p.WriteMarkdown())
+	fmt.Fprintf(os.Stderr, "\n-- wrote %s: %d file(s)\n", *out, len(p.Files))
+	if len(p.Missing) > 0 {
+		// Exit non-zero: a handover missing its runbook or its acceptance
+		// report is incomplete, and a command that says so only in prose gets
+		// run from a script that ignores prose.
+		fmt.Fprintf(os.Stderr, "-- INCOMPLETE: %d artefact(s) were never generated\n", len(p.Missing))
+		os.Exit(1)
+	}
+}
+
+// slug makes a filename out of a customer name, keeping CJK.
+func slug(s string) string {
+	out := connectors.FoldIdent(s)
+	if out == "" {
+		return "engagement"
+	}
+	return out
+}
+
+// runQuestions drafts an eval set from what people actually asked.
+func runQuestions(argv []string) {
+	fs := flag.NewFlagSet("questions", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	out := fs.String("out", "", "write the draft here (default: stdout)")
+	limit := fs.Int("limit", 40, "how many cases to propose")
+	engFile := fs.String("engagement", "", "take model and dsn from an engagement.yaml")
+	dbID := fs.String("db", "", "which database in the engagement")
+	_ = fs.Parse(argv)
+
+	customer := ""
+	if name, m, ds, _, _, _, ok := fromEngagement(*engFile, *dbID); ok {
+		model, dsn, customer = &m, &ds, name
+	}
+	ctx := context.Background()
+	eng, err := engine.New(ctx, *model, *dsn)
+	if err != nil {
+		fail(err)
+	}
+	defer eng.Close()
+
+	mined, err := nleval.MineQuestions(ctx, eng, customer, *limit)
+	if err != nil {
+		fail(err)
+	}
+	if len(mined) == 0 {
+		fmt.Fprintln(os.Stderr, "-- no questions in the audit trail yet; ask some through the product first")
+		os.Exit(1)
+	}
+	body := nleval.RenderMined(customer, mined)
+	if *out == "" {
+		fmt.Print(body)
+	} else if err := os.WriteFile(*out, []byte(body), 0o644); err != nil {
+		fail(err)
+	} else {
+		fmt.Fprintf(os.Stderr, "-- wrote %s: %d proposed case(s) — read them before promoting any\n", *out, len(mined))
+	}
+}
+
+// runAnchor turns a number the customer already publishes into a reconciliation
+// case.
+//
+// Without it every control query is written by the same person who wrote the
+// metric, and the delivery report can only ever say SELF-CONSISTENT. This is
+// the command that lets it say VERIFIED, and it is the reason the whole
+// reconciliation section is worth reading.
+func runAnchor(argv []string) {
+	fs := flag.NewFlagSet("anchor", flag.ExitOnError)
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
+	metric := fs.String("metric", "", "the metric the published figure is meant to be")
+	value := fs.String("value", "", "the figure the customer publishes, written as they write it (97.3 declares ±0.05)")
+	note := fs.String("note", "", "where the figure came from — page, report, date")
+	source := fs.String("source", nleval.SourceCustomerReport, "customer-report | customer-system")
+	tol := fs.Float64("tol", 0, "absolute tolerance (default: read off the figure's own precision)")
+	pick := fs.Int("pick", 0, "when several scopes match, choose one by number — the engineer decides, the case records it")
+	write := fs.Bool("write", false, "append the case to the reconciliation set")
+	recon := fs.String("recon", "", "reconciliation set (default: <model>.recon.yaml)")
+	engFile := fs.String("engagement", "", "take model and dsn from an engagement.yaml")
+	dbID := fs.String("db", "", "which database in the engagement")
+	_ = fs.Parse(argv)
+
+	if _, m, ds, r, _, _, ok := fromEngagement(*engFile, *dbID); ok {
+		model, dsn = &m, &ds
+		if *recon == "" && r != "" {
+			recon = &r
+		}
+	}
+	if *metric == "" || *value == "" {
+		fail(fmt.Errorf("anchor needs -metric and -value: the figure the customer publishes, and which metric it is meant to be"))
+	}
+	target, perr := strconv.ParseFloat(strings.TrimSpace(*value), 64)
+	if perr != nil {
+		fail(fmt.Errorf("-value %q is not a number", *value))
+	}
+	if *tol <= 0 {
+		*tol = anchor.ToleranceOf(*value)
+	}
+	if *recon == "" {
+		*recon = nleval.ReconPathFor(*model)
+	}
+
+	ctx := context.Background()
+	eng, err := engine.New(ctx, *model, *dsn)
+	if err != nil {
+		fail(err)
+	}
+	defer eng.Close()
+
+	res, err := anchor.Search(ctx, eng, *metric, target, anchor.Options{Tol: *tol})
+	if err != nil {
+		fail(err)
+	}
+
+	fmt.Printf("-- searched %d scope(s) in %d queries, tolerance ±%g\n", res.Searched, res.Queries, *tol)
+	for _, s := range res.Skipped {
+		fmt.Fprintf(os.Stderr, "-- not searched: %s\n", s)
+	}
+	for {
+		switch {
+		case len(res.Matches) == 0:
+			fmt.Printf("\nNo scope of %s produces %s.\n", *metric, *value)
+			if res.Closest != nil {
+				fmt.Printf("Closest: %s = %s (%s)\n", *metric, nleval.Num(res.Closest.Value), res.Closest.Label)
+			}
+			fmt.Println("\nThat is a finding, not a failure: either the figure is scoped by something")
+			fmt.Println("the model cannot express yet, or it is a different metric than we assumed.")
+			fmt.Println("Ask which, and what it excludes.")
+			os.Exit(1)
+		case res.TooCoarse():
+			// Everything matching is the failure that looks most like success.
+			fmt.Printf("\n%s cannot anchor anything: every scope of %s lands between %s and %s,\n",
+				*value, *metric, nleval.Num(res.Lo), nleval.Num(res.Hi))
+			fmt.Printf("and ±%g cannot tell them apart. %d scope(s) match.\n\n", *tol, len(res.Matches))
+			fmt.Println("This is a finding about the figure, not about the model. Ask for more")
+			fmt.Println("decimal places, or anchor on a metric that actually moves between plants")
+			fmt.Println("and quarters — a number everyone agrees on proves nothing about scope.")
+			os.Exit(1)
+		case len(res.Matches) > 1:
+			// Several scopes producing the same number is not an anchor. Picking
+			// one and writing it down would manufacture a verification out of a
+			// coincidence, and the report would then say VERIFIED on the strength
+			// of it.
+			if *pick >= 1 && *pick <= len(res.Matches) {
+				// A human chose. That is the only thing that can resolve this — the
+				// figure genuinely does not distinguish these scopes — and the note
+				// records who decided and on what basis.
+				res.Matches = res.Matches[*pick-1 : *pick]
+				break
+			}
+			fmt.Printf("\n%d scopes produce %s — that is ambiguous, not anchored:\n\n", len(res.Matches), *value)
+			for i, m := range res.Matches {
+				fmt.Printf("  [%d] %s\n", i+1, m.Label)
+			}
+			fmt.Println("\nAsk the customer which one their figure covers, then re-run with")
+			fmt.Println("-pick N. The choice is a business decision, so it is recorded as one.")
+			os.Exit(1)
+		}
+		break
+	}
+
+	m := res.Matches[0]
+	if res.Scale != 0 && res.Scale != 1 {
+		// The number was right and the units were not. Recording the converted
+		// value silently would hide the mismatch, and the next figure from the
+		// same report would hit it again.
+		fmt.Printf("\n%s is %s in the customer's units — the metric is %s, a factor of %g apart.\n",
+			*value, *metric, nleval.Num(m.Value), res.Scale)
+		fmt.Println("Confirm the unit with them before this becomes evidence.")
+		// Convert their figure into the metric's units — do NOT replace it with
+		// what we computed. Storing our own number and calling it the
+		// customer's is exactly the circularity this command exists to break.
+		target *= res.Scale
+		*tol *= math.Abs(res.Scale)
+	}
+	fmt.Printf("\n%s = %s over %s\n", *metric, nleval.Num(m.Value), m.Label)
+	// The tolerance travels with the case: the customer published three
+	// decimals, so three decimals is what this can ever prove. Left at the
+	// default 1e-6 the case fails forever against a metric that agrees with it
+	// to every digit they actually have.
+	c := nleval.ReconCase{Metric: *metric, Value: &target, Where: m.Where,
+		Source: *source, Note: *note, Tol: *tol}
+	if !*write {
+		fmt.Println("\nAdd this to " + *recon + " (or re-run with -write):")
+		fmt.Print("\n" + nleval.RenderCase(c))
+		return
+	}
+	if err := nleval.AppendCase(*recon, c); err != nil {
+		fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "-- appended to %s\n", *recon)
+}
+
 func runReport(argv []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
@@ -3450,7 +3671,7 @@ func runAdoption(argv []string) {
 	}
 	defer eng.Close()
 
-	a, err := handover.Measure(ctx, eng, name, *days)
+	a, err := handover.Measure(ctx, eng, name, name, *days)
 	if err != nil {
 		fail(err)
 	}

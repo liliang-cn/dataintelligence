@@ -54,6 +54,9 @@ type TurnResult struct {
 // critic is set, the turn is verified and may revise once.
 func (s *Session) Ask(ctx context.Context, question string) (*TurnResult, error) {
 	res := &TurnResult{Question: question}
+	// The trail records the question, not only what grounding made of it. The
+	// difference between the two is where an eval set comes from.
+	s.P.Question = question
 
 	var (
 		q   semantic.Query

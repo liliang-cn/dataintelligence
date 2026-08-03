@@ -31,6 +31,10 @@ type V1 struct {
 	DBs    *engine.Databases
 	Pol    governance.Policy
 	Verify auth.TokenVerifier // nil → open (dev): identity from X-DI-* headers
+	// Engagement stamps every audit row with the customer this deployment
+	// serves, so one deployment can serve several without their trails becoming
+	// one another's.
+	Engagement string
 }
 
 // resolve picks the database this request is for (X-DI-Database, ?database=,
@@ -124,9 +128,10 @@ func (v *V1) readyz(w http.ResponseWriter, r *http.Request) {
 func (v *V1) principalFrom(r *http.Request) (governance.Principal, bool, error) {
 	if v.Verify == nil {
 		role := orDefault(r.Header.Get("X-DI-Role"), "analyst")
-		return governance.Principal{User: "anon", Role: role, Attrs: map[string]string{
-			"tenant": r.Header.Get("X-DI-Tenant"), "region": r.Header.Get("X-DI-Region"),
-		}}, true, nil
+		return governance.Principal{User: "anon", Role: role, Engagement: v.Engagement,
+			Attrs: map[string]string{
+				"tenant": r.Header.Get("X-DI-Tenant"), "region": r.Header.Get("X-DI-Region"),
+			}}, true, nil
 	}
 	tok := bearerToken(r)
 	if tok == "" {
@@ -137,8 +142,9 @@ func (v *V1) principalFrom(r *http.Request) (governance.Principal, bool, error) 
 		return governance.Principal{}, false, err
 	}
 	return governance.Principal{
-		User: ti.UserID,
-		Role: orDefault(extra(ti, "role"), "analyst"),
+		User:       ti.UserID,
+		Role:       orDefault(extra(ti, "role"), "analyst"),
+		Engagement: v.Engagement,
 		Attrs: map[string]string{
 			"tenant": extra(ti, "tenant"), "region": extra(ti, "region"),
 		},
@@ -266,6 +272,11 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"clarify": clar.Question, "candidates": clar.Candidates})
 		return
 	}
+	// Carry the question into the trail. Without it the audit records that
+	// somebody asked for these three metrics grouped by month, which is what
+	// the system decided, not what the person asked — and the eval set then has
+	// to be written from imagination instead of from what people say.
+	p.Question = body.Question
 	ans, err := governance.Query(r.Context(), eng, q, p, v.Pol)
 	if err != nil {
 		writeErr(w, 403, err)

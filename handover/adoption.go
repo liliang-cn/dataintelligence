@@ -23,13 +23,14 @@ import (
 // the modelling effort was misspent — and the cheapest thing to hand back to
 // whoever commissioned it.
 type Adoption struct {
-	Database string        `json:"database"`
-	Days     int           `json:"days"`
-	Queries  int           `json:"queries"`
-	Refused  int           `json:"refused"`
-	Users    []UserUsage   `json:"users,omitempty"`
-	Metrics  []MetricUsage `json:"metrics,omitempty"`
-	Unused   []string      `json:"unused_metrics,omitempty"`
+	Database   string        `json:"database"`
+	Engagement string        `json:"engagement,omitempty"`
+	Days       int           `json:"days"`
+	Queries    int           `json:"queries"`
+	Refused    int           `json:"refused"`
+	Users      []UserUsage   `json:"users,omitempty"`
+	Metrics    []MetricUsage `json:"metrics,omitempty"`
+	Unused     []string      `json:"unused_metrics,omitempty"`
 }
 
 // UserUsage is one caller's activity.
@@ -51,16 +52,29 @@ type MetricUsage struct {
 // starts when auditing does, and a period with no rows is indistinguishable
 // from a period nobody worked. Days is reported alongside every figure so a
 // small number is read as a short window rather than as apathy.
-func Measure(ctx context.Context, eng *engine.Engine, database string, days int) (*Adoption, error) {
+// Measure reads the trail for one engagement.
+//
+// The engagement filter is not a convenience. One deployment serving several
+// customers writes every trail into one table, and an adoption report that
+// silently mixes them tells a customer that people are using metrics they do
+// not have — and, worse, is the moment somebody hands over another customer's
+// usage along with their own.
+func Measure(ctx context.Context, eng *engine.Engine, database, engagement string, days int) (*Adoption, error) {
 	if days <= 0 {
 		days = 30
 	}
-	a := &Adoption{Database: database, Days: days}
+	a := &Adoption{Database: database, Days: days, Engagement: engagement}
 
 	since := sinceExpr(eng.WH.Driver(), days)
+	where := "ts >= " + since
+	var args []any
+	if engagement != "" {
+		where += " AND " + eng.Dialect.QuoteIdent("engagement") + " = " + eng.Dialect.Placeholder(1)
+		args = append(args, engagement)
+	}
 	rows, err := eng.WH.Query(ctx, fmt.Sprintf(
-		`SELECT %s, role, metrics, refused FROM _audit WHERE ts >= %s`,
-		eng.Dialect.QuoteIdent("user"), since))
+		`SELECT %s, role, metrics, refused FROM _audit WHERE %s`,
+		eng.Dialect.QuoteIdent("user"), where), args...)
 	if err != nil {
 		// No trail is a finding, not a failure: it means nobody has asked
 		// anything, or auditing never wrote — and the caller should be told

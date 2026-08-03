@@ -5,6 +5,9 @@
 
 本文档是计划,不是承诺。每一条都写清楚:做什么、为什么、动哪里、怎么算做完。
 
+**状态(2026-08-03)**:17 项全部落地。下面保留了每一项当初的理由,并在标题上标了
+完成状态——理由比清单有用,因为下一次做类似判断时要复用的是理由。
+
 ---
 
 ## 一、这个框架管什么,不管什么
@@ -89,7 +92,7 @@ delta:
 
 ## 四、分期
 
-### P0 —— 一次交付端到端可复现
+### P0 —— 一次交付端到端可复现 ✅
 
 **完成标志**:从零到一份能递给 CFO 的报告,别人照着 engagement.yaml 能复现。
 
@@ -123,7 +126,7 @@ cases:
 报告里就能写:「6 条对账中,4 条锚定客户既有数字,2 条为工程师自行推导」。
 **那句话才值钱**——它把「验证」和「验证剧场」分开了。
 
-### P0.5 —— Day 2
+### P0.5 —— Day 2 ✅
 
 被 invisibletech 点名为头号失败模式:
 > "client teams lack capacity to **maintain delivered solutions afterward**"
@@ -138,16 +141,16 @@ cases:
 
 `rollout` 和 `shadow` 已经存在,这一期主要是**把它们绑到 engagement 上**并生成文档。
 
-### P1 —— 让证明可信,让产品能给多人用
+### P1 —— 让证明可信,让产品能给多人用 ✅
 
 | # | 做什么 | 为什么 |
 |---|---|---|
-| 9 | **从客户已有的数反推对照查询** —— 给一个数字 + 一句口径,生成候选 SQL 让人确认 | 把「我和我自己一致」变成「我和客户的账一致」。这是 P0 那个洞的真正解法 |
-| 10 | evalset 半自动 —— 从真实提问日志里挑,而不是凭空写 | 手写评测集是第二堆工时 |
+| 9 | **`di anchor`** —— 给一个客户已发布的数字,反推它对应哪个范围 | 把「我和我自己一致」变成「我和客户的账一致」。这是 P0 那个洞的真正解法 |
+| 10 | **`di questions`** —— 从审计里挖真实提问,归并同义问法,按人数排序 | 手写评测集测的是写的人的想象力 |
 | 11 | 产品多用户 + 角色 | 客户有 5 个高管,「谁看了什么」在产品层要答得上来 |
 | 12 | **`di adoption`** —— 谁在问、多久问一次、**哪些指标从来没人查** | 对应 **Weekly Executive Summary**。`di report` 证明算得对,但没有任何东西显示有人在用。一个没人打开的正确看板等于零 |
 
-### P1.5 —— Delta 回流
+### P1.5 —— Delta 回流 ✅
 
 **这是 FDE 与咨询的分水岭,也是我第一版规划完全漏掉的一块。**
 
@@ -161,13 +164,26 @@ cases:
 
 **没有这一步,飞轮不转**,每次交付的成本都一样。
 
-### P2 —— 规模化
+已经转过两轮:一汽那个库让 `modelgen` 暴露出「比率生成器只认零售的收入/成本形状」,
+SAP 那条链让落地路径暴露出六个洞(整数除法、补零码、列名大小写、无主键、
+`sum(MANDT)`、逐行 INSERT)。都是先记进 `delta:`,再变成 core 的功能。
+
+### P2 —— 规模化 ✅
 
 | # | 做什么 |
 |---|---|
 | 15 | engagement 级别的审计隔离(一个部署服务多个客户) |
 | 16 | 交付包 —— 一次 engagement 打包成可移交的整体 |
 | 17 | `examples/` 变成行业起手式库(现有 meridian / fitness 是雏形) |
+
+15 的做法:`_audit` 加 `engagement` 列,`config.yaml` 的 `engagement:` 往每一行上盖戳,
+读审计的命令(`adoption` / `questions`)一律按它过滤。**不能过滤到某个客户的审计,
+就不能拿给那个客户看**——那一刻会有人把整张表导出去,连带别人的提问一起交出去。
+
+16 的做法:`di package` 打 tar.gz,附一份 MANIFEST:每个文件的 SHA-256、
+**缺哪些交付物**(缺就退出码非零)、需要哪些环境变量(只写名字,不写值)、
+以及 di 和 semantic-go 的版本。最后一条最容易被忽略:编译器版本决定每个指标背后的
+SQL,两个版本可以都对但末位不一致,而「这个数变了」是必须能回答的。
 
 ---
 
@@ -178,6 +194,7 @@ cases:
 | 通用 BI 看板 | 那是往产品走不是往框架走,而且是红海 |
 | 「模型提议 SQL、人点执行」 | 与治理门控直接冲突。要做是另一个产品(给数据团队,不是给老板) |
 | 云基础设施层(Terraform/K8s/Spark) | 那是 FDE 本人的技能树。硬做变成又一个云平台 |
+| ~~数据质量闸门~~ | **这条判断错了**。roadmap Phase 1 的 "data quality & observability" 不属于技能树而属于框架:`StageWithKey` 在落地时验证声明的主键(「你说 VBELN+POSNR 唯一标识一行,它不是」)就是 Bronze 层闸门,`examples/erp` 是样板 |
 | 课程 / 培训 | 工具复利,课程不复利 |
 | 纯事务型系统(下单、支付) | 和语义层没关系,别硬套 |
 
@@ -199,14 +216,28 @@ roadmap 定义了四份模板。对照现状:
 
 | FDE 标准交付物 | 这里的对应 | 状态 |
 |---|---|---|
-| Site Survey | `di survey` | **P0 待做** |
-| Technical Scoping & PRD | `engagement.yaml` + 语义模型 | **P0 待做**(模型已有) |
-| Deployment Architecture | di-server + core 的部署拓扑 | 已有,缺文档 |
-| Weekly Executive Summary | `di report` + `di adoption` | 一半已有,`adoption` 待做 |
+| Site Survey | `di survey` | ✅ 另长出了分段停摆检查和隐式外键检查 |
+| Technical Scoping & PRD | `engagement.yaml` + 语义模型 | ✅ |
+| Deployment Architecture | `docs/DEPLOYMENT.md` | ✅ |
+| Weekly Executive Summary | `di report` + `di adoption` | ✅ |
 
 ---
 
-## 起点
+## 一次交付的完整命令序列
 
-**P0 的 1 和 2**(`engagement.yaml` + `di survey`)。它们决定后面所有东西挂在哪,
-且 3/4/5 都是小改动,可以并行。
+```bash
+di survey     -engagement engagement.yaml -out out/survey.md   # ① 先看,别问
+di model gen  -dsn "$DSN" -out models/x.yaml                   # ② 草稿,然后人改
+di anchor     -metric 一次合格率 -value 97.3 -note "月报第4页"   # ③ 用客户的数定口径
+di eval       -engagement engagement.yaml                       # ④ 每个指标对账
+di questions  -engagement engagement.yaml -out out/mined.yaml   # ⑤ 从真实提问挖评测集
+di report     -engagement engagement.yaml                       # ⑥ 验收报告
+di handover   -engagement engagement.yaml                       # ⑦ 运维手册 + CI 闸门
+di drift      -engagement engagement.yaml                       # ⑧ 之后每天跑
+di adoption   -engagement engagement.yaml                       # ⑨ 有没有人在用
+di package    -engagement engagement.yaml                       # ⑩ 打包移交
+di delta      -root ~/engagements                               # ⑪ 跨客户汇总,回流产品
+```
+
+③ 是分水岭:没有它,验收报告最多写「自洽」;有它,才写得出「已验证」。
+⑪ 是 FDE 和咨询的分水岭:没有它,第 N 次交付和第 1 次一样贵。

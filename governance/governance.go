@@ -26,6 +26,18 @@ type Principal struct {
 	User  string
 	Role  string
 	Attrs map[string]string
+
+	// Question is the natural-language question this query came from, when
+	// there was one. Recording it is what makes the trail answerable: "who ran
+	// what" is a compliance answer, and "what did people actually ask" is the
+	// one that tells you which metrics were worth building. It is also the only
+	// honest source for an eval set — questions written by the engineer are the
+	// questions the engineer already knows the system handles.
+	Question string
+	// Engagement scopes the row to one customer. One deployment serving several
+	// customers writes all their trails into one table, and an audit that
+	// cannot be filtered to a customer cannot be shown to that customer.
+	Engagement string
 }
 
 // RowFilter is a row-level-security rule: for callers in Roles, scope the query
@@ -313,19 +325,24 @@ func AuditRawSQL(ctx context.Context, eng *engine.Engine, p Principal, database,
 var auditDDL = map[string]string{
 	"pgx": `CREATE TABLE IF NOT EXISTS _audit (
 		ts timestamptz DEFAULT now(), "user" text, role text,
-		metrics text, group_by text, sql text, refused bool, note text)`,
+		metrics text, group_by text, sql text, refused bool, note text,
+		question text, engagement text)`,
 	"mysql": "CREATE TABLE IF NOT EXISTS _audit (" +
 		"ts DATETIME DEFAULT CURRENT_TIMESTAMP, `user` VARCHAR(190), role VARCHAR(190)," +
-		"metrics TEXT, group_by TEXT, `sql` TEXT, refused BOOLEAN, note TEXT)",
+		"metrics TEXT, group_by TEXT, `sql` TEXT, refused BOOLEAN, note TEXT," +
+		"question TEXT, engagement TEXT)",
 	"sqlite": `CREATE TABLE IF NOT EXISTS _audit (
 		ts TEXT DEFAULT (datetime('now')), "user" TEXT, role TEXT,
-		metrics TEXT, group_by TEXT, "sql" TEXT, refused INTEGER, note TEXT)`,
+		metrics TEXT, group_by TEXT, "sql" TEXT, refused INTEGER, note TEXT,
+		question TEXT, engagement TEXT)`,
 	"sqlserver": `IF OBJECT_ID('_audit','U') IS NULL CREATE TABLE _audit (
 		ts DATETIME2 DEFAULT SYSUTCDATETIME(), [user] NVARCHAR(190), role NVARCHAR(190),
-		metrics NVARCHAR(MAX), group_by NVARCHAR(MAX), [sql] NVARCHAR(MAX), refused BIT, note NVARCHAR(MAX))`,
+		metrics NVARCHAR(MAX), group_by NVARCHAR(MAX), [sql] NVARCHAR(MAX), refused BIT, note NVARCHAR(MAX),
+		question NVARCHAR(MAX), engagement NVARCHAR(MAX))`,
 	"duckdb": `CREATE TABLE IF NOT EXISTS _audit (
 		ts TIMESTAMP DEFAULT now(), "user" VARCHAR, role VARCHAR,
-		metrics VARCHAR, group_by VARCHAR, "sql" VARCHAR, refused BOOLEAN, note VARCHAR)`,
+		metrics VARCHAR, group_by VARCHAR, "sql" VARCHAR, refused BOOLEAN, note VARCHAR,
+		question VARCHAR, engagement VARCHAR)`,
 }
 
 // writeAudit appends one row to the trail.
@@ -346,7 +363,8 @@ func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, g
 		auditProblem(driver, err)
 		return
 	}
-	cols := []string{"user", "role", "metrics", "group_by", "sql", "refused", "note"}
+	ensureAuditColumns(ctx, eng)
+	cols := []string{"user", "role", "metrics", "group_by", "sql", "refused", "note", "question", "engagement"}
 	quoted := make([]string, len(cols))
 	holders := make([]string, len(cols))
 	for i, c := range cols {
@@ -355,9 +373,56 @@ func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, g
 	}
 	stmt := fmt.Sprintf("INSERT INTO _audit (%s) VALUES (%s)",
 		strings.Join(quoted, ", "), strings.Join(holders, ", "))
-	if _, err := eng.WH.Exec(ctx, stmt, p.User, p.Role, metrics, groupBy, sql, refused, note); err != nil {
+	if _, err := eng.WH.Exec(ctx, stmt, p.User, p.Role, metrics, groupBy, sql, refused, note,
+		p.Question, p.Engagement); err != nil {
 		auditProblem(driver, err)
 	}
+}
+
+// auditColumns are added after the fact.
+//
+// The trail predates both of them, and a deployment that has been running for a
+// year has rows without them. CREATE TABLE IF NOT EXISTS does not add a column
+// to a table that already exists, so it is an ALTER — and the engines disagree
+// about how to say "only if absent", so the only portable spelling is to try it
+// and read the error. A duplicate-column error here is the expected outcome on
+// every call after the first.
+var auditColumns = []string{"question", "engagement"}
+
+var auditMigrated sync.Map
+
+func ensureAuditColumns(ctx context.Context, eng *engine.Engine) {
+	driver := eng.WH.Driver()
+	if _, done := auditMigrated.LoadOrStore(driver, true); done {
+		return
+	}
+	typ := "text"
+	switch driver {
+	case "sqlserver":
+		typ = "NVARCHAR(MAX)"
+	case "mysql":
+		typ = "TEXT"
+	case "duckdb":
+		typ = "VARCHAR"
+	}
+	for _, c := range auditColumns {
+		stmt := fmt.Sprintf("ALTER TABLE _audit ADD COLUMN %s %s", eng.Dialect.QuoteIdent(c), typ)
+		if _, err := eng.WH.Exec(ctx, stmt); err != nil && !alreadyExists(err) {
+			auditProblem(driver, err)
+		}
+	}
+}
+
+// alreadyExists recognises the several ways an engine says "that column is
+// already there", which is not a problem.
+func alreadyExists(err error) bool {
+	e := strings.ToLower(err.Error())
+	for _, s := range []string{"already exists", "duplicate column", "duplicate_column"} {
+		if strings.Contains(e, s) {
+			return true
+		}
+	}
+	return false
 }
 
 var auditWarned sync.Map

@@ -15,7 +15,17 @@ import (
 
 // Config is the whole service configuration.
 type Config struct {
-	Model     string     `yaml:"model"`      // semantic model YAML path (single-database form)
+	// Engagement names the customer this deployment serves. Every audit row is
+	// stamped with it.
+	//
+	// One deployment serving several customers writes all their trails into one
+	// table, and a trail that cannot be filtered to a customer cannot be shown
+	// to that customer — which is the moment somebody exports the whole thing
+	// and hands over another customer's questions along with it. It is also
+	// what lets an eval set be mined per customer instead of from everyone's
+	// questions at once.
+	Engagement string     `yaml:"engagement"`
+	Model      string     `yaml:"model"`      // semantic model YAML path (single-database form)
 	Sources   string     `yaml:"sources"`    // source manifest path (optional)
 	IndexPath string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
 	Databases []Database `yaml:"databases"`  // multi-database form; see Defs

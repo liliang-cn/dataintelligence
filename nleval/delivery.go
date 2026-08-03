@@ -151,17 +151,24 @@ func (d *Delivery) WriteMarkdown(w io.Writer) {
 		p("proves the model is self-consistent; only a figure the customer already")
 		p("publishes proves it is right.")
 		p("")
-		p("| Metric | Semantic layer | Control | Anchor | |")
-		p("|---|---:|---:|---|---|")
+		// Scope is a column, not a footnote. A published figure covers one
+		// quarter or one plant, and a row that shows the match without saying
+		// over what invites the reader to assume it was the whole warehouse —
+		// which is the strongest reading and the wrong one.
+		p("| Metric | Scope | Semantic layer | Control | Anchor | |")
+		p("|---|---|---:|---:|---|---|")
 		for _, r := range d.Recon.Results {
-			anchor := anchorLabel(r)
+			anchor, scope := anchorLabel(r), r.Scope
+			if scope == "" {
+				scope = "everything"
+			}
 			switch {
 			case r.Error != "":
-				p("| `%s` | — | — | %s | ✗ %s |", r.Metric, anchor, oneLine(r.Error))
+				p("| `%s` | %s | — | — | %s | ✗ %s |", r.Metric, scope, anchor, oneLine(r.Error))
 			case r.Pass:
-				p("| `%s` | %s | %s | %s | ✓ |", r.Metric, Num(r.Got), Num(r.Want), anchor)
+				p("| `%s` | %s | %s | %s | %s | ✓ |", r.Metric, scope, Num(r.Got), Num(r.Want), anchor)
 			default:
-				p("| `%s` | %s | %s | %s | **✗ differs** |", r.Metric, Num(r.Got), Num(r.Want), anchor)
+				p("| `%s` | %s | %s | %s | %s | **✗ differs** |", r.Metric, scope, Num(r.Got), Num(r.Want), anchor)
 			}
 		}
 		if d.Recon.Anchored < d.Recon.Total {
