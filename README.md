@@ -351,8 +351,17 @@ di report     # the handover document
 Paths resolve against the file rather than the working directory, and a
 `${VAR}` the environment does not define is reported by name — an unset DSN
 otherwise surfaces as "database erp needs a dsn", which is true and points at
-the wrong thing. See [`examples/engagement/`](examples/engagement/), and
-[`docs/FDE-ROADMAP.md`](docs/FDE-ROADMAP.md) for where this is going.
+the wrong thing.
+
+**[`examples/engagement/`](examples/engagement/) is one customer start to
+finish**, with the artefacts it produced and a `warehouse.sql` you can build so
+the figures in it are the figures you get. It is also where the point of all
+this is easiest to see: revenue per square metre comes out as 16,191.71 through
+the semantic layer and 112.44 from the obvious hand-written join, because
+joining floor area to sales repeats each shop's area once per sales row. The
+naive query runs clean and is wrong by 144×.
+
+[`docs/FDE-ROADMAP.md`](docs/FDE-ROADMAP.md) is where this is going.
 
 ## The site survey
 

@@ -256,3 +256,25 @@ func TestDriftGroupsFeedsThatStoppedTogether(t *testing.T) {
 		t.Errorf("an unrelated stale feed should still be listed:\n%s", out)
 	}
 }
+
+// A format verb split across two writes prints "%!s(MISSING)" into the document
+// the customer is handed. Render the whole runbook and check it came out clean.
+func TestRunbookHasNoFormattingLeftovers(t *testing.T) {
+	e := &engagement.Engagement{
+		Customer:  "Acme",
+		Databases: []engagement.Database{{ID: "erp", Model: "m.yaml", Recon: "m.recon.yaml"}},
+		Deliver:   engagement.Deliver{Roles: []string{"ceo", "finance"}},
+	}
+	var b strings.Builder
+	(&Runbook{E: e}).WriteMarkdown(&b)
+	out := b.String()
+
+	for _, bad := range []string{"%!", "(MISSING)", "%s", "%d"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("unrendered format verb %q in the runbook:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "ceo, finance") {
+		t.Errorf("the roles should appear in the sentence:\n%s", out)
+	}
+}

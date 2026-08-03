@@ -1,0 +1,30 @@
+name: Semantic model gate
+
+# Runs the checks the delivery was signed off with. A metric that stops matching
+# its control query, a column that was renamed, or a feed that stopped sending
+# all produce clean-looking wrong answers rather than errors — this is what
+# turns them into a failed build instead.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"   # daily: drift arrives without a commit
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      # Warehouse credentials come from repository secrets, never the file.
+      CONGLOM_DSN: ${{ secrets.CONGLOM_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25" }
+      - run: go install github.com/liliang-cn/dataintelligence/cmd/di@latest
+
+      - name: Metrics still match their control queries
+        run: di eval
+
+      - name: Nothing changed underneath the model
+        run: di drift

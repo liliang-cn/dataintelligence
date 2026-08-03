@@ -1,50 +1,39 @@
 # One customer delivery. Every command that takes -engagement reads this, so a
-# colleague can reproduce the work from what is checked in rather than from
+# colleague reproduces the work from what is checked in rather than from
 # whoever remembers the flags.
 #
-#   di survey                 # week one: what is actually in there
-#   di model gen -dsn …       # draft a model, then edit it
-#   di eval                   # every metric vs a hand-written control query
-#   di report                 # the handover document
+#   di survey     # week one: what is actually in there
+#   di eval       # every metric against its control query
+#   di report     # the handover document
+#   di handover   # the runbook and the CI gate
+#   di drift      # run this on a schedule afterwards
 #
 # Paths resolve against this file, not the working directory. Credentials come
 # from the environment; a variable that is not set is reported by name.
 
-customer: Acme Retail
-started: 2026-07-29
+customer: Conglomerate Retail
+started: 2026-08-03
 owner: liliang
 
 databases:
-  - id: erp
-    dsn: ${ACME_ERP_DSN}
-    model: models/erp.yaml
-    # recon defaults to models/erp.recon.yaml
-
-  # Week one has databases nobody has modelled yet. Say so rather than
-  # pretending: without a model this one is direct read-only SQL and has no
-  # metrics, which is the honest state of it.
-  - id: pos
-    dsn: ${ACME_POS_DSN}
-
-evalset: models/questions.yaml
+  - id: warehouse
+    dsn: ${CONGLOM_DSN}
+    model: models/warehouse.yaml
+    # recon defaults to models/warehouse.recon.yaml
 
 deliver:
   report: out/delivery.md
   roles: [ceo, finance, store_manager]
 
-# What this engagement needed that the core did not have.
-#
-# This is the difference between a forward-deployed engineer and a consultant:
-# a consultant finishes and leaves; an engineer makes the next engagement
-# cheaper by feeding the gap back. Nothing feeds back that nobody wrote down.
-# When the same item shows up in a third engagement, it stops being a
-# workaround and becomes the next feature.
+# What this engagement needed that the platform did not do. Once is a
+# workaround; the third time somebody hand-rolls the same thing is the
+# expensive one, which is what `di delta` counts.
 delta:
-  - kind: transform
-    what: ERP stores dates as varchar 'YYYYMMDD'; they need converting on the way in
-    workaround: sql/erp_dates.sql
-    cost: half a day
-
   - kind: missing-feature
-    what: the customer's fiscal year starts in April; the compiler only knows calendar years
-    workaround: a separate fiscal_period dimension maintained by hand
+    what: cross-table ratios (shrinkage over revenue, revenue over floor area) are not proposed by the generator
+    workaround: written by hand into models/warehouse.yaml
+    cost: an afternoon
+
+  - kind: data-issue
+    what: every fact table stops at 2025-12-01 — eight months with no new data
+    workaround: none; the customer's IT need to say whether the load stopped or moved

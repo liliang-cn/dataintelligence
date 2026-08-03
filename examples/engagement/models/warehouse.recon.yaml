@@ -1,0 +1,40 @@
+# Every metric computed twice: once through the semantic layer, once with a
+# control query written by hand. They must agree.
+#
+# `source` is where the expected figure came from, and it is the difference
+# between verification and theatre. A control written by whoever wrote the
+# metric, from the same misunderstanding, agrees with it — and agreement is not
+# correctness. This engagement has no counterpart to ask, so every case here is
+# `engineer` and the report correctly says SELF-CONSISTENT. On a real delivery
+# these are the lines you replace with figures the customer already publishes.
+cases:
+  - metric: sale_revenue_sum
+    control: SELECT sum(revenue) FROM sales
+    source: engineer
+
+  - metric: sale_gross_margin
+    control: SELECT (sum(revenue) - sum(cogs_amount)) / sum(revenue) FROM sales
+    source: engineer
+    note: One grain, so the two sides are summed first and divided once.
+
+  - metric: sale_revenue_per_transaction
+    control: SELECT sum(revenue) / sum(transactions) FROM sales
+    source: engineer
+    note: An average of totals, not an average of per-row averages.
+
+  - metric: shrinkage_rate
+    control: SELECT (SELECT sum(loss_amount) FROM shrinkage) / (SELECT sum(revenue) FROM sales)
+    source: engineer
+    note: Each fact table aggregated to its own grain before the division.
+
+  - metric: sales_per_sqm
+    control: SELECT (SELECT sum(revenue) FROM sales) / (SELECT sum(area_sqm) FROM stores)
+    source: engineer
+    note: >
+      The one worth checking. Joining sales to stores repeats each shop's area
+      once per sales row (144 of them), inflating the denominator 144×. The
+      query runs clean and the answer is wrong by two orders of magnitude.
+
+  - metric: store_count
+    control: SELECT count(*) FROM stores
+    source: engineer

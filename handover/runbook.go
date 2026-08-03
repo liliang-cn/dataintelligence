@@ -117,8 +117,8 @@ func (r *Runbook) WriteMarkdown(w io.Writer) {
 	p("")
 	p("- **What a metric means.** The tool guarantees the same definition is applied")
 	p("  everywhere. It cannot tell you whether revenue should be net of refunds.")
-	p("- **Who may see what.** Roles gate metrics%s. Adding a person to a role is a")
-	p("  business decision.", rolesNote(e.Deliver.Roles))
+	p("- **Who may see what.** Roles gate metrics%s. Adding a person to a", rolesNote(e.Deliver.Roles))
+	p("  role is a business decision.")
 	p("- **Whether a feed is allowed to stop.** `di drift` reports one that has. Only")
 	p("  you know whether that is a broken pipeline or a shop that closed.")
 

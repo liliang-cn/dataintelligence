@@ -1,0 +1,515 @@
+entities:
+- name: category
+  table: categories
+  primary_key: category_id
+- name: employee
+  table: employees
+  primary_key: emp_id
+- name: overhead
+  table: overheads
+  primary_key: oh_id
+- name: procurement
+  table: procurement
+  primary_key: proc_id
+- name: sale
+  table: sales
+  primary_key: sale_id
+- name: shrinkage
+  table: shrinkage
+  primary_key: loss_id
+- name: store
+  table: stores
+  primary_key: store_id
+joins:
+- from: employee
+  to: store
+  from_key: store_id
+  to_key: store_id
+  cardinality: many_to_one
+- from: overhead
+  to: store
+  from_key: store_id
+  to_key: store_id
+  cardinality: many_to_one
+- from: procurement
+  to: store
+  from_key: store_id
+  to_key: store_id
+  cardinality: many_to_one
+- from: procurement
+  to: category
+  from_key: category_id
+  to_key: category_id
+  cardinality: many_to_one
+- from: sale
+  to: store
+  from_key: store_id
+  to_key: store_id
+  cardinality: many_to_one
+- from: sale
+  to: category
+  from_key: category_id
+  to_key: category_id
+  cardinality: many_to_one
+- from: shrinkage
+  to: store
+  from_key: store_id
+  to_key: store_id
+  cardinality: many_to_one
+- from: shrinkage
+  to: category
+  from_key: category_id
+  to_key: category_id
+  cardinality: many_to_one
+dimensions:
+- name: category_name
+  entity: category
+  column: name
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: employee_position
+  entity: employee
+  column: position
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: employee_hire_date
+  entity: employee
+  column: hire_date
+  type: time
+  synonyms: []
+  mask: ''
+- name: employee_active
+  entity: employee
+  column: active
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: overhead_month
+  entity: overhead
+  column: month
+  type: time
+  synonyms: []
+  mask: ''
+- name: procurement_month
+  entity: procurement
+  column: month
+  type: time
+  synonyms: []
+  mask: ''
+- name: sale_month
+  entity: sale
+  column: month
+  type: time
+  synonyms: []
+  mask: ''
+- name: shrinkage_month
+  entity: shrinkage
+  column: month
+  type: time
+  synonyms: []
+  mask: ''
+- name: store_name
+  entity: store
+  column: name
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: store_city
+  entity: store
+  column: city
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: store_region
+  entity: store
+  column: region
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: store_format
+  entity: store
+  column: format
+  type: categorical
+  synonyms: []
+  mask: ''
+- name: store_open_date
+  entity: store
+  column: open_date
+  type: time
+  synonyms: []
+  mask: ''
+metrics:
+- name: category_count
+  description: Number of distinct category (auto-generated; review).
+  synonyms:
+  - category count
+  - number of categories
+  entity: category
+  agg: count_distinct
+  expr: category_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: employee_count
+  description: Number of distinct employee (auto-generated; review).
+  synonyms:
+  - employee count
+  - number of employees
+  entity: employee
+  agg: count_distinct
+  expr: emp_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: employee_monthly_salary_sum
+  description: Sum of employees.monthly_salary (auto-generated; confirm it is additive).
+  synonyms:
+  - monthly salary
+  entity: employee
+  agg: sum
+  expr: monthly_salary
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: overhead_count
+  description: Number of distinct overhead (auto-generated; review).
+  synonyms:
+  - overhead count
+  - number of overheads
+  entity: overhead
+  agg: count_distinct
+  expr: oh_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: overhead_rent_sum
+  description: Sum of overheads.rent (auto-generated; confirm it is additive).
+  synonyms:
+  - rent
+  entity: overhead
+  agg: sum
+  expr: rent
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: overhead_utilities_sum
+  description: Sum of overheads.utilities (auto-generated; confirm it is additive).
+  synonyms:
+  - utilities
+  entity: overhead
+  agg: sum
+  expr: utilities
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: overhead_tax_sum
+  description: Sum of overheads.tax (auto-generated; confirm it is additive).
+  synonyms:
+  - tax
+  entity: overhead
+  agg: sum
+  expr: tax
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: overhead_labor_sum
+  description: Sum of overheads.labor (auto-generated; confirm it is additive).
+  synonyms:
+  - labor
+  entity: overhead
+  agg: sum
+  expr: labor
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: procurement_count
+  description: Number of distinct procurement (auto-generated; review).
+  synonyms:
+  - procurement count
+  - number of procurement
+  entity: procurement
+  agg: count_distinct
+  expr: proc_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: procurement_purchase_qty_sum
+  description: Sum of procurement.purchase_qty (auto-generated; confirm it is additive).
+  synonyms:
+  - purchase qty
+  entity: procurement
+  agg: sum
+  expr: purchase_qty
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: procurement_purchase_amount_sum
+  description: Sum of procurement.purchase_amount (auto-generated; confirm it is additive).
+  synonyms:
+  - purchase amount
+  entity: procurement
+  agg: sum
+  expr: purchase_amount
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: procurement_purchase_amount_per_purchase_qty
+  description: purchase_amount per purchase_qty (auto-generated; an average of totals,
+    not an average of averages).
+  synonyms:
+  - purchase_amount per purchase_qty
+  entity: ''
+  agg: ''
+  expr: ''
+  formula: procurement_purchase_amount_sum / nullif(procurement_purchase_qty_sum,
+    0)
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: sale_count
+  description: Number of distinct sale (auto-generated; review).
+  synonyms:
+  - sale count
+  - number of sales
+  entity: sale
+  agg: count_distinct
+  expr: sale_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: sale_revenue_sum
+  description: Sum of sales.revenue (auto-generated; confirm it is additive).
+  synonyms:
+  - revenue
+  entity: sale
+  agg: sum
+  expr: revenue
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: sale_transactions_sum
+  description: Sum of sales.transactions (auto-generated; confirm it is additive).
+  synonyms:
+  - transactions
+  entity: sale
+  agg: sum
+  expr: transactions
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: sale_units_sum
+  description: Sum of sales.units (auto-generated; confirm it is additive).
+  synonyms:
+  - units
+  entity: sale
+  agg: sum
+  expr: units
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: sale_cogs_amount_sum
+  description: Sum of sales.cogs_amount (auto-generated; confirm it is additive).
+  synonyms:
+  - cogs amount
+  entity: sale
+  agg: sum
+  expr: cogs_amount
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: sale_gross_margin
+  description: 'Margin: (revenue − cogs_amount) ÷ revenue (auto-generated; confirm
+    this is the margin the business means).'
+  synonyms:
+  - margin
+  - gross margin
+  - sale margin
+  entity: ''
+  agg: ''
+  expr: ''
+  formula: (sale_revenue_sum - sale_cogs_amount_sum) / nullif(sale_revenue_sum, 0)
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: sale_revenue_per_transaction
+  description: revenue per transaction (auto-generated; an average of totals, not
+    an average of averages).
+  synonyms:
+  - revenue per transaction
+  entity: ''
+  agg: ''
+  expr: ''
+  formula: sale_revenue_sum / nullif(sale_transactions_sum, 0)
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: sale_revenue_per_unit
+  description: revenue per unit (auto-generated; an average of totals, not an average
+    of averages).
+  synonyms:
+  - revenue per unit
+  entity: ''
+  agg: ''
+  expr: ''
+  formula: sale_revenue_sum / nullif(sale_units_sum, 0)
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: shrinkage_count
+  description: Number of distinct shrinkage (auto-generated; review).
+  synonyms:
+  - shrinkage count
+  - number of shrinkage
+  entity: shrinkage
+  agg: count_distinct
+  expr: loss_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: shrinkage_loss_qty_sum
+  description: Sum of shrinkage.loss_qty (auto-generated; confirm it is additive).
+  synonyms:
+  - loss qty
+  entity: shrinkage
+  agg: sum
+  expr: loss_qty
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: shrinkage_loss_amount_sum
+  description: Sum of shrinkage.loss_amount (auto-generated; confirm it is additive).
+  synonyms:
+  - loss amount
+  entity: shrinkage
+  agg: sum
+  expr: loss_amount
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: shrinkage_loss_amount_per_loss_qty
+  description: loss_amount per loss_qty (auto-generated; an average of totals, not
+    an average of averages).
+  synonyms:
+  - loss_amount per loss_qty
+  entity: ''
+  agg: ''
+  expr: ''
+  formula: shrinkage_loss_amount_sum / nullif(shrinkage_loss_qty_sum, 0)
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: store_count
+  description: Number of distinct store (auto-generated; review).
+  synonyms:
+  - store count
+  - number of stores
+  entity: store
+  agg: count_distinct
+  expr: store_id
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: non_additive
+  roles: []
+- name: store_area_sqm_sum
+  description: Sum of stores.area_sqm (auto-generated; confirm it is additive).
+  synonyms:
+  - area sqm
+  entity: store
+  agg: sum
+  expr: area_sqm
+  formula: ''
+  of: ''
+  window: ''
+  reset: ''
+  additivity: ''
+  roles: []
+- name: shrinkage_rate
+  description: Loss as a share of revenue. Two fact tables at their own grains — a
+    join between them multiplies both sides.
+  synonyms:
+  - shrinkage rate
+  - shrink
+  - loss rate
+  formula: shrinkage_loss_amount_sum / nullif(sale_revenue_sum, 0)
+  additivity: non_additive
+  roles: []
+- name: sales_per_sqm
+  description: Revenue per square metre of selling floor. The area lives in stores,
+    one row per shop; joining it to sales counts each shop's area once per sales row.
+  synonyms:
+  - sales per sqm
+  - sales density
+  formula: sale_revenue_sum / nullif(store_area_sqm_sum, 0)
+  additivity: non_additive
+  roles: []
