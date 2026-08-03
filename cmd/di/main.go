@@ -3496,6 +3496,8 @@ func runSurvey(argv []string) {
 	stale := fs.Duration("stale-after", 60*24*time.Hour, "flag a time column whose newest value is older than this")
 	maxDistinct := fs.Int64("max-distinct", 50, "cap the distinct-value probe per column")
 	skipFK := fs.Bool("skip-orphans", false, "skip referential-integrity probes (the costliest part)")
+	sampleAbove := fs.Int64("sample-above", survey.DefaultSampleAbove, "profile distinct values from a sample above this row count (0 = never)")
+	sampleRows := fs.Int64("sample-rows", 200_000, "roughly how many rows a sample reads")
 	_ = fs.Parse(argv)
 
 	ctx := context.Background()
@@ -3527,6 +3529,7 @@ func runSurvey(argv []string) {
 
 	rep, err := survey.Run(ctx, wh, name, survey.Options{
 		MaxDistinct: *maxDistinct, StaleAfter: *stale, SkipOrphans: *skipFK,
+		SampleAbove: *sampleAbove, SampleRows: *sampleRows,
 	})
 	if err != nil {
 		fail(err)

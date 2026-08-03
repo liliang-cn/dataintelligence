@@ -21,6 +21,20 @@ func (r *Report) WriteMarkdown(w io.Writer) {
 	p("Everything below came from a query against the live database. Nothing is")
 	p("inferred from table or column names.")
 
+	if n, biased := r.sampledColumns(); n > 0 {
+		p("")
+		p("**%d column(s) were profiled from a sample** and are marked ~ below. Their", n)
+		p("distinct counts are lower bounds: a value that is rare may simply not have")
+		p("been drawn. Ranges are never sampled — those come from a full pass, because")
+		p("a sampled maximum would invent a stopped feed or hide one.")
+		if biased {
+			p("")
+			p("This engine has no sampling clause, so the sample is the first rows in")
+			p("storage order rather than a cross-section — usually the oldest. Treat")
+			p("\"no recent value\" in a sampled column as an artefact, not a finding.")
+		}
+	}
+
 	if len(r.Findings) > 0 {
 		p("")
 		p("## Summary")
@@ -114,7 +128,7 @@ func (r *Report) WriteMarkdown(w io.Writer) {
 		p("|---|---|---:|---:|---|")
 		for _, c := range t.Columns {
 			p("| `%s` | %s | %s | %s | %s |",
-				c.Name, c.Type, pct(c.Nulls), distinct(c.Distinct), rangeOrValues(c))
+				c.Name, c.Type, pct(c.Nulls), distinctOf(c), rangeOrValues(c))
 		}
 	}
 }
@@ -133,6 +147,17 @@ func distinct(d int64) string {
 		return "many"
 	}
 	return fmt.Sprintf("%d", d)
+}
+
+// distinctOf marks a sampled count so no reader takes it for an exact one.
+func distinctOf(c Column) string {
+	if c.Distinct < 0 {
+		return "many"
+	}
+	if c.Approx {
+		return fmt.Sprintf("~%d", c.Distinct)
+	}
+	return fmt.Sprintf("%d", c.Distinct)
 }
 
 func rangeOrValues(c Column) string {

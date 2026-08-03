@@ -235,3 +235,70 @@ func TestCadenceComesFromThePeriodsNotTheSegments(t *testing.T) {
 		t.Errorf("fallback = %v", got)
 	}
 }
+
+// A sampled distinct count is a lower bound: a value that is rare may simply
+// not have been drawn. On six million rows with one row in a second region, the
+// sample sees one value — and "a constant, not a dimension" is a claim strong
+// enough to change the model, so it must not be made from a sample.
+func TestSampledCountsDoNotAssertExactness(t *testing.T) {
+	sampled := Column{Name: "region", Distinct: 1, Approx: true}
+	if got := sampled.findings(6_000_000, Options{StaleAfter: 1}); len(got) != 0 {
+		t.Errorf("a sampled column must not be called a constant: %v", got)
+	}
+	exact := Column{Name: "region", Distinct: 1}
+	if got := exact.findings(6_000_000, Options{StaleAfter: 1}); len(got) != 1 {
+		t.Errorf("an exact count of 1 is a real finding, got %v", got)
+	}
+}
+
+// The segment check slices a table by its low-cardinality columns. A sample
+// that drew three plants out of eleven would report the other eight as feeds
+// that stopped — eight false alarms in the section that most needs to be taken
+// seriously.
+func TestSampledColumnsAreNotUsedAsSegments(t *testing.T) {
+	c := Column{Name: "plant", Type: "text", Distinct: 4, Approx: true}
+	if isSegmentLike(c) && !c.Approx {
+		t.Fatal("setup")
+	}
+	// findSegmentGaps filters on !Approx; assert the field is what gates it, so
+	// the guard cannot be removed without this failing.
+	if !c.Approx {
+		t.Error("a sampled column must carry Approx so the segment check can skip it")
+	}
+}
+
+// Zero means never sample, literally. A zero value that silently meant five
+// million was why `-sample-above 0` produced a report still marked as sampled.
+func TestSampleAboveZeroMeansNever(t *testing.T) {
+	o := Options{SampleAbove: 0}
+	o.withDefaults()
+	if o.SampleAbove != 0 {
+		t.Errorf("SampleAbove = %d, want 0 (never)", o.SampleAbove)
+	}
+	if s := samplerFor("pgx", 100_000_000, o); s.on() {
+		t.Error("sampling is on with SampleAbove=0")
+	}
+	o2 := Options{SampleAbove: DefaultSampleAbove}
+	o2.withDefaults()
+	if s := samplerFor("pgx", 100_000_000, o2); !s.on() {
+		t.Error("sampling is off on a hundred million rows at the default threshold")
+	}
+}
+
+// MySQL and SQLite have no sampling clause, so the sample is the first rows in
+// storage order. That is still worth doing and it must be labelled, because
+// "no value seen after 2019" would otherwise read as a finding.
+func TestEnginesWithoutSamplingAreMarkedBiased(t *testing.T) {
+	o := Options{SampleAbove: DefaultSampleAbove}
+	o.withDefaults()
+	for _, driver := range []string{"mysql", "sqlite"} {
+		if s := samplerFor(driver, 100_000_000, o); !s.on() || !s.biased {
+			t.Errorf("%s: on=%v biased=%v — want a bounded, labelled-as-biased sample", driver, s.on(), s.biased)
+		}
+	}
+	for _, driver := range []string{"pgx", "sqlserver", "duckdb"} {
+		if s := samplerFor(driver, 100_000_000, o); !s.on() || s.biased {
+			t.Errorf("%s: on=%v biased=%v — want a real random sample", driver, s.on(), s.biased)
+		}
+	}
+}

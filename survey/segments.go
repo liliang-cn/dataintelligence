@@ -57,12 +57,40 @@ func findSegmentGaps(ctx context.Context, wh *warehouse.Warehouse, q func(string
 		// column with few values is usually a measure that happens to repeat:
 		// coke tonnage per workshop looked like a five-way segmentation, and
 		// "coke_t = 382.000 stopped reporting" is not a sentence anyone can act on.
-		case c.Distinct >= 2 && c.Distinct <= 24 && isSegmentLike(c):
+		// Never from a sampled count. A sample that drew three plants out of
+		// eleven would report the other eight as segments that stopped
+		// reporting — eight false alarms in the section the reader most needs
+		// to take seriously.
+		case c.Distinct >= 2 && c.Distinct <= 24 && !c.Approx && isSegmentLike(c):
 			segments = append(segments, c)
 		}
 	}
 	if len(times) == 0 || len(segments) == 0 || t.Rows < minRowsForCadence {
 		return nil
+	}
+	// One query per (time × segment) pair is a full GROUP BY scan each, and the
+	// product grows with the square of the table's width: a two-hundred-column
+	// fact table with ten date columns and twenty codes is two hundred scans
+	// for one table. That is worse than the per-column probing this was meant
+	// to complement, and it lands on the customer's production database on day
+	// one.
+	//
+	// One time column is enough. A feed that stopped stops in the table's event
+	// time, and a table's event time is the column that runs latest — ship_date
+	// and order_date both go quiet together, so checking both buys nothing and
+	// costs a scan.
+	sort.Slice(times, func(i, j int) bool {
+		a, aok := parseTime(times[i].Max)
+		b, bok := parseTime(times[j].Max)
+		return aok && bok && a.After(b)
+	})
+	times = times[:1]
+	if len(segments) > maxSegmentColumns {
+		// Lowest cardinality first: a plant, a line, a shift. Those are what
+		// anyone means by "one site stopped reporting"; a code with twenty
+		// values is already close to being an identifier.
+		sort.Slice(segments, func(i, j int) bool { return segments[i].Distinct < segments[j].Distinct })
+		segments = segments[:maxSegmentColumns]
 	}
 
 	var out []SegmentGap
@@ -116,6 +144,11 @@ func findSegmentGaps(ctx context.Context, wh *warehouse.Warehouse, q func(string
 	sort.Slice(out, func(i, j int) bool { return out[i].Behind > out[j].Behind })
 	return out
 }
+
+// maxSegmentColumns caps how many ways one table is sliced looking for a part
+// that stopped. Six is more than any real "one site went quiet" needs, and it
+// keeps a wide table from costing a scan per code column.
+const maxSegmentColumns = 6
 
 // isSegmentLike reports whether a column names a thing rather than measures one.
 func isSegmentLike(c Column) bool {

@@ -14,7 +14,6 @@ package survey
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +24,17 @@ import (
 
 // Column is one column, as the data actually looks.
 type Column struct {
+	// Approx marks a distinct count that came from a sample. A sampled count is
+	// a lower bound: rare values may simply not have been drawn. That is fine
+	// for "is this high cardinality" and useless for "is this a constant", so
+	// the findings that assert exactness are suppressed when it is set.
+	Approx     bool    `json:"approx,omitempty"`
+	SampledPct float64 `json:"sampled_pct,omitempty"`
+	// Biased marks a sample taken in storage order rather than at random —
+	// MySQL and SQLite have no sampling clause. It is usually the oldest rows,
+	// so "no value seen after 2019" is an artefact, not a finding.
+	Biased bool `json:"biased,omitempty"`
+
 	Name     string   `json:"name"`
 	Type     string   `json:"type"`
 	Nullable bool     `json:"nullable"`
@@ -78,6 +88,19 @@ type Options struct {
 	StaleAfter time.Duration
 	// SkipOrphans skips referential-integrity probes, which are the costliest part.
 	SkipOrphans bool
+	// SampleAbove is the row count past which distinct-value probes read a
+	// sample instead of the whole table. Zero means never sample, and it means
+	// that literally: a zero value that silently meant five million was the
+	// reason `-sample-above 0` produced a report still marked as sampled.
+	// Callers who want the default pass DefaultSampleAbove.
+	//
+	// It is high on purpose. An exact distinct count is worth much more than an
+	// estimate — "status has eleven values and three are typos" is a
+	// conversation, "about eleven" is not — so sampling starts only where the
+	// exact count stops being affordable on someone else's production database.
+	SampleAbove int64
+	// SampleRows is roughly how many rows a sample should read.
+	SampleRows int64
 	// Only restricts the survey to these tables. The day-2 drift check uses it
 	// to profile just what the model depends on: a warehouse has a thousand
 	// tables and the delivery reads thirteen, and a gate that costs a full
@@ -91,6 +114,9 @@ func (o *Options) withDefaults() {
 	}
 	if o.StaleAfter <= 0 {
 		o.StaleAfter = 60 * 24 * time.Hour
+	}
+	if o.SampleRows <= 0 {
+		o.SampleRows = defaultSampleRows
 	}
 }
 
@@ -126,12 +152,11 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, database string, opts Opt
 		}
 
 		for _, c := range t.Columns {
-			col := Column{Name: c.Name, Type: c.Type, Nullable: c.Nullable, Distinct: -1}
-			if tbl.Rows > 0 {
-				col.profile(ctx, wh, q, t.Name, tbl.Rows, opts)
-				tbl.Findings = append(tbl.Findings, col.findings(tbl.Rows, opts)...)
-			}
-			tbl.Columns = append(tbl.Columns, col)
+			tbl.Columns = append(tbl.Columns, Column{Name: c.Name, Type: c.Type, Nullable: c.Nullable, Distinct: -1})
+		}
+		profileTable(ctx, wh, q, &tbl, opts)
+		for i := range tbl.Columns {
+			tbl.Findings = append(tbl.Findings, tbl.Columns[i].findings(tbl.Rows, opts)...)
 		}
 		rep.Gaps = append(rep.Gaps, findSegmentGaps(ctx, wh, q, tbl)...)
 		rep.Tables = append(rep.Tables, tbl)
@@ -143,46 +168,6 @@ func Run(ctx context.Context, wh *warehouse.Warehouse, database string, opts Opt
 	}
 	rep.Findings = summarise(rep)
 	return rep, nil
-}
-
-// profile fills in what the data looks like, as opposed to what it is declared to be.
-func (c *Column) profile(ctx context.Context, wh *warehouse.Warehouse, q func(string) string, table string, rows int64, opts Options) {
-	col, tbl := q(c.Name), q(table)
-
-	nulls := scalarInt(ctx, wh, fmt.Sprintf("SELECT count(*) FROM %s WHERE %s IS NULL", tbl, col))
-	if rows > 0 {
-		c.Nulls = math.Round(float64(nulls)/float64(rows)*1000) / 1000
-	}
-
-	// Cap the distinct probe: on a wide fact table an exact count of a
-	// high-cardinality column is a full scan for a number nobody needs.
-	// NULL is excluded: counting it as a value makes an all-null column look
-	// like a constant, and the report then says both "entirely null" and "one
-	// value in every row" about the same column — two findings, one of them
-	// wrong, which is how a reader stops trusting the rest.
-	d := scalarInt(ctx, wh, fmt.Sprintf(
-		"SELECT count(*) FROM (SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL LIMIT %d) _d",
-		col, tbl, col, opts.MaxDistinct+1))
-	if d > opts.MaxDistinct {
-		c.Distinct = -1 // high cardinality: an identifier or a measure, not a dimension
-	} else {
-		c.Distinct = d
-		// A column with few values is a dimension in waiting. The actual values
-		// are what a customer recognises — "status has eleven values and three
-		// of them are typos" is a conversation the survey should start.
-		if d > 0 && d <= opts.MaxDistinct && !isNumericType(c.Type) {
-			c.Sample = queryStrings(ctx, wh, fmt.Sprintf(
-				"SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL LIMIT 12", col, tbl, col))
-		}
-	}
-
-	if isTimeType(c.Type) {
-		cast := textCast(wh.Driver())
-		if r := queryStrings(ctx, wh, fmt.Sprintf("SELECT %s, %s FROM %s",
-			cast("MIN("+col+")"), cast("MAX("+col+")"), tbl)); len(r) == 2 {
-			c.Min, c.Max = r[0], r[1]
-		}
-	}
 }
 
 // MinRowsForCadence is exported so the Day 2 check uses the same judgement as
@@ -197,6 +182,12 @@ const MinRowsForCadence = minRowsForCadence
 // reader to skim the section it most needs them to read.
 const minRowsForCadence = 30
 
+// DefaultSampleAbove is where sampling starts. High on purpose: an exact
+// distinct count is worth much more than an estimate, so sampling begins only
+// where the exact count stops being affordable on someone else's production
+// database.
+const DefaultSampleAbove = 5_000_000
+
 func (c *Column) findings(rows int64, opts Options) []string {
 	var out []string
 	switch {
@@ -205,7 +196,10 @@ func (c *Column) findings(rows int64, opts Options) []string {
 	case c.Nulls >= 0.5:
 		out = append(out, fmt.Sprintf("%s is %.0f%% null — check whether it is optional or broken", c.Name, c.Nulls*100))
 	}
-	if c.Distinct == 1 && rows > 1 {
+	// Only from an exact count. A sample that happened to draw one value says
+	// nothing about the other ten million rows, and "a constant, not a
+	// dimension" is a claim strong enough to change the model.
+	if c.Distinct == 1 && rows > 1 && !c.Approx {
 		out = append(out, fmt.Sprintf("%s has one value in every row — a constant, not a dimension", c.Name))
 	}
 	// The finding most often missed, and the most expensive: a source that
@@ -454,4 +448,18 @@ func humanInt(n int64) string {
 		b.WriteRune(c)
 	}
 	return b.String()
+}
+
+// sampledColumns counts what was profiled from a sample, and whether any of it
+// came from a biased one.
+func (r *Report) sampledColumns() (n int, biased bool) {
+	for _, t := range r.Tables {
+		for _, c := range t.Columns {
+			if c.Approx {
+				n++
+				biased = biased || c.Biased
+			}
+		}
+	}
+	return n, biased
 }

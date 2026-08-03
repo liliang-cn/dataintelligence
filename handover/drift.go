@@ -131,7 +131,7 @@ func Check(ctx context.Context, eng *engine.Engine, set *nleval.ReconSet, staleA
 	for _, t := range tableOf {
 		tables = append(tables, t)
 	}
-	prof, perr := survey.Run(ctx, eng.WH, "", survey.Options{SkipOrphans: true, Only: tables})
+	prof, perr := survey.Run(ctx, eng.WH, "", survey.Options{SkipOrphans: true, Only: tables, SampleAbove: survey.DefaultSampleAbove})
 	if perr == nil {
 		d.SegmentGaps = prof.Gaps
 	}

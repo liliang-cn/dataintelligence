@@ -170,7 +170,7 @@ func Introspect(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {
 		if wh.Driver() == "sqlite" {
 			retypeSQLiteDates(ctx, wh, &t)
 		}
-		markCategoricalIntegers(ctx, wh, &t)
+		markCategoricalIntegers(ctx, wh, &t, rowsOf(ctx, wh, t.Name))
 		s.Tables = append(s.Tables, t)
 	}
 	return &s, nil
@@ -292,29 +292,51 @@ const categoricalCeiling = 24
 // unmistakable codes are demoted. The probe is bounded by a LIMIT and costs the
 // same on a large fact table as on a small one; an unbounded count(DISTINCT)
 // over a warehouse is how this tool gets banned from production on day one.
-func markCategoricalIntegers(ctx context.Context, wh *warehouse.Warehouse, t *Table) {
-	d := wh.Dialect()
+func markCategoricalIntegers(ctx context.Context, wh *warehouse.Warehouse, t *Table, rows int64) {
+	var ints []int
 	for i := range t.Columns {
-		c := &t.Columns[i]
-		if !isIntegerType(c.Type) {
-			continue
+		if isIntegerType(t.Columns[i].Type) {
+			ints = append(ints, i)
 		}
-		col, tbl := d.QuoteIdent(c.Name), d.QuoteIdent(t.Name)
-		res, err := wh.Query(ctx, fmt.Sprintf(
-			"SELECT count(*), min(%s), max(%s) FROM (SELECT DISTINCT %s FROM %s LIMIT %d) x",
-			col, col, col, tbl, categoricalCeiling+1))
-		if err != nil || len(res.Rows) == 0 || len(res.Rows[0]) < 3 {
-			continue // a probe that fails must not change the draft
+	}
+	if len(ints) == 0 {
+		return
+	}
+	// Above this the probe is not worth its scan, and the safe answer is to
+	// leave the column as a measure: dropping a real measure is worse than
+	// leaving a silly one in, because a missing metric is invisible.
+	if rows > maxRowsForCategoricalProbe {
+		return
+	}
+
+	// One query for every integer column in the table, not one per column. The
+	// per-column form was a scan each — thirty scans of a fact table to decide
+	// whether thirty columns are codes, issued against production the first
+	// time anyone runs `di model gen`.
+	d := wh.Dialect()
+	exprs := make([]string, 0, len(ints)*3)
+	for _, i := range ints {
+		col := d.QuoteIdent(t.Columns[i].Name)
+		exprs = append(exprs, "count(DISTINCT "+col+")", "min("+col+")", "max("+col+")")
+	}
+	res, err := wh.Query(ctx, fmt.Sprintf("SELECT %s FROM %s",
+		strings.Join(exprs, ", "), d.QuoteIdent(t.Name)))
+	if err != nil || len(res.Rows) == 0 || len(res.Rows[0]) < len(exprs) {
+		return // a probe that fails must not change the draft
+	}
+	row := res.Rows[0]
+	for k, i := range ints {
+		n, ok1 := asInt(row[k*3])
+		lo, ok2 := asInt(row[k*3+1])
+		hi, ok3 := asInt(row[k*3+2])
+		if ok1 && ok2 && ok3 {
+			t.Columns[i].Categorical = isCodeNotQuantity(n, lo, hi)
 		}
-		n, ok1 := asInt(res.Rows[0][0])
-		lo, ok2 := asInt(res.Rows[0][1])
-		hi, ok3 := asInt(res.Rows[0][2])
-		if !ok1 || !ok2 || !ok3 {
-			continue
-		}
-		c.Categorical = isCodeNotQuantity(n, lo, hi)
 	}
 }
+
+// maxRowsForCategoricalProbe bounds where the one-pass probe is affordable.
+const maxRowsForCategoricalProbe = 20_000_000
 
 // isCodeNotQuantity applies the rule: few distinct values that do not form a
 // dense run from zero or one.
@@ -348,4 +370,13 @@ func asInt(v any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func rowsOf(ctx context.Context, wh *warehouse.Warehouse, table string) int64 {
+	res, err := wh.Query(ctx, "SELECT count(*) FROM "+wh.Dialect().QuoteIdent(table))
+	if err != nil || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	n, _ := asInt(res.Rows[0][0])
+	return n
 }
