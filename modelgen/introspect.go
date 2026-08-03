@@ -20,6 +20,9 @@ type Column struct {
 	Name     string
 	Type     string // information_schema data_type
 	Nullable bool
+	// Categorical marks an integer column the data says is a code: few distinct
+	// values, so summing it means nothing.
+	Categorical bool
 }
 
 // ForeignKey is a declared FK edge (this table's Column → RefTable.RefColumn).
@@ -167,6 +170,7 @@ func Introspect(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {
 		if wh.Driver() == "sqlite" {
 			retypeSQLiteDates(ctx, wh, &t)
 		}
+		markCategoricalIntegers(ctx, wh, &t)
 		s.Tables = append(s.Tables, t)
 	}
 	return &s, nil
@@ -264,5 +268,84 @@ func str(v any) string {
 		return string(t)
 	default:
 		return ""
+	}
+}
+
+// categoricalCeiling is how many distinct values an integer column may hold and
+// still be a category rather than a measure.
+const categoricalCeiling = 24
+
+// markCategoricalIntegers finds integer columns that name something instead of
+// measuring it.
+//
+// Names catch most of them — order_id, sku — but not all: SAP's client column
+// is MANDT, and the draft proposed "sum of MANDT", the sum of a client number.
+//
+// Where the name is silent, the *shape* of the values is not. A quantity is a
+// dense run from zero or one: seven distinct values 1..7 is a quantity. A code
+// is drawn from an arbitrary set: two distinct values 100 and 200 span a
+// hundred and one integers, so it is a client number.
+//
+// The rule stays deliberately narrow. Dropping a real measure is worse than
+// leaving a silly one in, because a missing metric is invisible and a silly one
+// is not — so anything that could be a quantity keeps its metric, and only the
+// unmistakable codes are demoted. The probe is bounded by a LIMIT and costs the
+// same on a large fact table as on a small one; an unbounded count(DISTINCT)
+// over a warehouse is how this tool gets banned from production on day one.
+func markCategoricalIntegers(ctx context.Context, wh *warehouse.Warehouse, t *Table) {
+	d := wh.Dialect()
+	for i := range t.Columns {
+		c := &t.Columns[i]
+		if !isIntegerType(c.Type) {
+			continue
+		}
+		col, tbl := d.QuoteIdent(c.Name), d.QuoteIdent(t.Name)
+		res, err := wh.Query(ctx, fmt.Sprintf(
+			"SELECT count(*), min(%s), max(%s) FROM (SELECT DISTINCT %s FROM %s LIMIT %d) x",
+			col, col, col, tbl, categoricalCeiling+1))
+		if err != nil || len(res.Rows) == 0 || len(res.Rows[0]) < 3 {
+			continue // a probe that fails must not change the draft
+		}
+		n, ok1 := asInt(res.Rows[0][0])
+		lo, ok2 := asInt(res.Rows[0][1])
+		hi, ok3 := asInt(res.Rows[0][2])
+		if !ok1 || !ok2 || !ok3 {
+			continue
+		}
+		c.Categorical = isCodeNotQuantity(n, lo, hi)
+	}
+}
+
+// isCodeNotQuantity applies the rule: few distinct values that do not form a
+// dense run from zero or one.
+func isCodeNotQuantity(distinct, lo, hi int64) bool {
+	if distinct <= 1 || distinct > categoricalCeiling {
+		return false
+	}
+	return !(lo <= 1 && hi-lo+1 == distinct)
+}
+
+func isIntegerType(t string) bool {
+	t = strings.ToLower(t)
+	for _, k := range []string{"int", "serial", "number"} {
+		if strings.Contains(t, k) {
+			return !strings.Contains(t, "point") && !strings.Contains(t, "interval")
+		}
+	}
+	return false
+}
+
+func asInt(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		return 0, false
 	}
 }

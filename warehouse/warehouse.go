@@ -11,6 +11,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
+
+	semantic "github.com/liliang-cn/semantic-go"
 )
 
 const (
@@ -64,6 +66,29 @@ func (w *Warehouse) Close() error { return w.db.Close() }
 // engine-specific SQL — schema introspection, chiefly — branch on this rather
 // than guessing from the DSN they no longer hold.
 func (w *Warehouse) Driver() string { return w.driver }
+
+// Dialect is the SQL shape this backend understands.
+//
+// It lives on the warehouse because the dialect must follow the backend and
+// never be a separate setting: compiling Postgres SQL for MySQL is how "revenue
+// by month" becomes a syntax error, or worse, a number bucketed the wrong way.
+// Callers that need it (the compiler, the landing path) ask the connection
+// rather than re-deriving it from a driver string — "pgx" is not "postgres",
+// and a second copy of that mapping is a second chance to get it wrong.
+func (w *Warehouse) Dialect() semantic.Dialect {
+	switch w.driver {
+	case "mysql":
+		return semantic.MySQL{}
+	case "sqlite":
+		return semantic.SQLite{}
+	case "sqlserver":
+		return semantic.SQLServer{}
+	case "duckdb":
+		return semantic.DuckDB{}
+	default:
+		return semantic.Postgres{}
+	}
+}
 
 // MaxScanBytes exposes the configured byte ceiling (0 = disabled).
 func (w *Warehouse) MaxScanBytes() int64 { return w.opts.MaxScanBytes }

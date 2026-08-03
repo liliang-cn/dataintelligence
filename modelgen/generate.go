@@ -92,7 +92,7 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 				// — common in warehouses loaded by ETL — and the draft then
 				// offers "sum of store_id", which is meaningless and, worse,
 				// makes every other generated metric look equally unconsidered.
-				if looksLikeIdentifier(c.Name) {
+				if looksLikeIdentifier(c.Name) || c.Categorical {
 					m.Dimensions = append(m.Dimensions, semantic.Dimension{
 						Name: dimName(ent, c.Name), Entity: ent, Column: c.Name, Type: "categorical",
 					})

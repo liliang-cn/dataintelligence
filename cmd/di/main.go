@@ -2543,11 +2543,17 @@ func runSource(argv []string) {
 			fail(err)
 		}
 		defer wh.Close()
-		n, err := connectors.Stage(ctx, wh, tbl, batch)
+		spec := man.Spec(name)
+		n, err := connectors.StageWithKey(ctx, wh, tbl, batch, spec.PrimaryKey)
 		if err != nil {
 			fail(err)
 		}
-		fmt.Printf("ingested %d rows from source %q (%s) into %s\n", n, name, man.Spec(name).Type, tbl)
+		fmt.Printf("ingested %d rows from source %q (%s) into %s\n", n, name, spec.Type, tbl)
+		if h, ok := src.(*connectors.HTTPSource); ok && h.Truncated != "" {
+			// A capped pull presented as a complete one is the same lie as a
+			// stopped feed: the totals are simply short, and nothing says so.
+			fmt.Fprintf(os.Stderr, "-- INCOMPLETE: %s\n", h.Truncated)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown source subcommand %q (list|read|ingest)\n", sub)
 		os.Exit(2)

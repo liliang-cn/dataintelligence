@@ -47,26 +47,7 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{Model: m, WH: wh, Dialect: dialectFor(wh.Driver())}, nil
-}
-
-// dialectFor pairs an open warehouse with the SQL shape it understands. The
-// dialect must follow the backend, not a separate setting: compiling Postgres
-// SQL for MySQL is how "revenue by month" becomes a syntax error (there is no
-// DATE_TRUNC) or, worse, a number bucketed the wrong way.
-func dialectFor(driver string) semantic.Dialect {
-	switch driver {
-	case "mysql":
-		return semantic.MySQL{}
-	case "sqlite":
-		return semantic.SQLite{}
-	case "sqlserver":
-		return semantic.SQLServer{}
-	case "duckdb":
-		return semantic.DuckDB{}
-	default:
-		return semantic.Postgres{}
-	}
+	return &Engine{Model: m, WH: wh, Dialect: wh.Dialect()}, nil
 }
 
 func (e *Engine) Close() error { return e.WH.Close() }

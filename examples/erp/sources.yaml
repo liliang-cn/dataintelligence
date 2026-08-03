@@ -1,0 +1,78 @@
+# Landing an ERP.
+#
+# Every vendor below appears here and nowhere else: the platform binary knows
+# source TYPES (odata/http, mssql, mysql), never a customer or a product. Adding
+# SAP did not add a Go file.
+#
+# The shape is always: land it, then model it. An HTTP API cannot take a pushed
+# down GROUP BY, cannot be cost-estimated with EXPLAIN, and has no role to SET,
+# so it is never on the query path — records land in the warehouse and every
+# governed read after that is unchanged.
+
+sources:
+  # ---------------------------------------------------------------- SAP
+  # An SAP Gateway / S4 CDS view over OData v2. If the customer already has a
+  # replica — BW, SLT, Datasphere, or a HANA read-only user — use that instead
+  # and treat it as a database. It is faster, cheaper, and does not compete with
+  # order entry for the production system's attention.
+  - name: sap_billing
+    type: odata
+    # SAP's own key. The transport does not carry one, and a table with no key
+    # cannot be modelled — the compiler has to know a table's grain before it
+    # can promise anything about fan-out. Declared here, asserted at load time:
+    # "you told me VBELN+POSNR identifies a row, and it does not" is a finding.
+    primary_key: [VBELN, POSNR]
+    config:
+      url: "${SAP_BASE}/sap/opu/odata/sap/ZBILL_SRV/Items?$format=json"
+      auth: basic
+      username: "${SAP_USER}"
+      password: "${SAP_PASS}"
+      header.sap-client: "100"   # without it the service answers 403, not empty
+      records_path: "d.results"  # v2. OData v4 puts it in "value"
+      page: odata
+      cursor_field: AEDAT        # incremental watermark
+      rps: "3"                   # this points at a production ERP
+      max_pages: "500"
+
+  # SAP BTP and the Chinese cloud ERPs issue client-credentials tokens instead.
+  # - name: sap_btp_orders
+  #   type: http
+  #   primary_key: [OrderID]
+  #   config:
+  #     url: "${BTP_BASE}/odata/v4/OrderService/Orders"
+  #     auth: oauth2
+  #     token_url: "${BTP_TOKEN_URL}"
+  #     client_id: "${BTP_CLIENT_ID}"
+  #     client_secret: "${BTP_CLIENT_SECRET}"
+  #     records_path: value
+  #     page: odata
+
+  # ------------------------------------------------- 管家婆 / 用友 / 金蝶
+  # These almost always run on-premise SQL Server, and a read-only user is less
+  # work than any API. Table names differ by version — do not ask, run
+  # `di survey` and look.
+  # - name: gjp_sales
+  #   type: mssql
+  #   primary_key: [id]
+  #   config:
+  #     dsn: "${GJP_DSN}"
+  #     query: "SELECT * FROM ..."
+
+  # Their cloud editions expose an OpenAPI, which is the `http` type with
+  # offset paging and a tenant header.
+  # - name: gjp_cloud_sales
+  #   type: http
+  #   primary_key: [billNo, rowNo]
+  #   config:
+  #     url: "${GJP_BASE}/openapi/sale/list"
+  #     auth: oauth2
+  #     token_url: "${GJP_TOKEN_URL}"
+  #     client_id: "${GJP_APPKEY}"
+  #     client_secret: "${GJP_SECRET}"
+  #     header.tenant-id: "${GJP_TENANT}"
+  #     records_path: data.items
+  #     page: offset
+  #     page_param: offset
+  #     size_param: limit
+  #     page_size: "200"
+  #     cursor_field: modifyTime

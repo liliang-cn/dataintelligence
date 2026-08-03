@@ -97,13 +97,13 @@ func inferType(values []string) string {
 			continue
 		}
 		n++
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil || isPadded(v) {
 			allInt = false
 		}
-		if _, err := strconv.ParseFloat(v, 64); err != nil {
+		if _, err := strconv.ParseFloat(v, 64); err != nil || isPadded(v) {
 			allFloat = false
 		}
-		if _, err := time.Parse("2006-01-02", v); err != nil {
+		if !looksLikeDate(v) {
 			allDate = false
 		}
 		if lv := strings.ToLower(v); lv != "true" && lv != "false" {
@@ -135,4 +135,40 @@ func baseName(path string) string {
 		p = p[:i]
 	}
 	return p
+}
+
+// looksLikeDate accepts the spellings the sources in this package actually
+// meet. A date-only layout was enough for CSV and silently demoted every
+// timestamp an ERP's JSON API returns to text — after which the column cannot
+// be a time dimension, and nothing says why.
+func looksLikeDate(v string) bool {
+	for _, layout := range []string{
+		"2006-01-02", time.RFC3339, "2006-01-02T15:04:05",
+		"2006-01-02 15:04:05", "2006/01/02", "20060102",
+	} {
+		if _, err := time.Parse(layout, v); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// isPadded reports a zero-padded code: a run of digits with a leading zero.
+//
+// It is not a number, it is an identifier that happens to be spelled in digits,
+// and every ERP is full of them — SAP zero-pads document numbers, item
+// positions, material numbers and cost centres; Chinese ERPs do the same with
+// 单据号 and 存货编码. Landing "000010" as an integer turns it into 10, and the
+// column can no longer be joined back to the system it came from. Nothing
+// errors; the join simply returns fewer rows than it should.
+func isPadded(v string) bool {
+	if len(v) < 2 || v[0] != '0' {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false // "0.5" is a number; "007" is a code
+		}
+	}
+	return true
 }
