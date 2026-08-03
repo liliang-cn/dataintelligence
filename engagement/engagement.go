@@ -34,6 +34,11 @@ type Database struct {
 
 	// AllowRawSQL opens direct SQL on a modelled database. Off by default.
 	AllowRawSQL bool `yaml:"allow_raw_sql"`
+
+	// Vars are the environment variables this database's DSN referenced, before
+	// expansion. A generated CI workflow needs the names to wire up secrets, and
+	// by the time anything reads the DSN the names are gone.
+	Vars []string `yaml:"-"`
 }
 
 // Deliver names the artefacts handed over.
@@ -90,6 +95,11 @@ func Load(path string) (*Engagement, error) {
 	if missing := unsetVars(string(raw)); len(missing) > 0 {
 		return nil, fmt.Errorf("%s: these variables are not set: %s", path, strings.Join(missing, ", "))
 	}
+	// Read the variable names off the unexpanded file: after expansion they are
+	// indistinguishable from a hardcoded credential, and a generated workflow
+	// needs them to reference secrets rather than inline the password.
+	rawVars := dsnVars(string(raw))
+
 	var e Engagement
 	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(raw))), &e); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
@@ -119,6 +129,7 @@ func Load(path string) (*Engagement, error) {
 		if d.DSN == "" {
 			return nil, fmt.Errorf("%s: database %q needs a dsn", path, d.ID)
 		}
+		d.Vars = rawVars[d.ID]
 		d.Model = e.resolve(d.Model)
 		d.Recon = e.resolve(d.Recon)
 		if d.Model != "" && d.Recon == "" {
@@ -174,6 +185,31 @@ func (e *Engagement) Modelled() (modelled, total int) {
 
 // varRef matches ${NAME} and $NAME, the two forms os.ExpandEnv understands.
 var varRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// dsnVars maps each database id to the variable names its dsn: line references.
+// It reads the file textually because the values are gone after expansion.
+func dsnVars(text string) map[string][]string {
+	out := map[string][]string{}
+	var current string
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "- id:"):
+			current = strings.TrimSpace(strings.TrimPrefix(trimmed, "- id:"))
+		case strings.HasPrefix(trimmed, "id:"):
+			current = strings.TrimSpace(strings.TrimPrefix(trimmed, "id:"))
+		case strings.HasPrefix(trimmed, "dsn:") && current != "":
+			for _, m := range varRef.FindAllStringSubmatch(trimmed, -1) {
+				name := m[1]
+				if name == "" {
+					name = m[2]
+				}
+				out[current] = append(out[current], name)
+			}
+		}
+	}
+	return out
+}
 
 // unsetVars lists the environment variables the file references and the
 // environment does not define, in order, without duplicates.

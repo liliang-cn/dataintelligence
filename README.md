@@ -120,6 +120,10 @@ Build order is load-bearing: **meaning first, transport last.**
 | Identity | real OIDC/JWT + on-behalf-of to the warehouse | `di obo`, `di pentest` |
 | Evaluation | accuracy gate vs control SQL + LLM judge | `di nleval` |
 | Handover | delivery report: what was modelled, and what proves it | `di report` |
+| Day 2 | runbook + CI gate for the team that inherits it | `di handover` |
+| Day 2 | has anything changed underneath the model? | `di drift` |
+| Day 2 | who uses this, and what nobody ever asks for | `di adoption` |
+| Feedback | what the product could not do, across engagements | `di delta` |
 | Write-back | NL → typed proposal → approve → commit → rollback | `di propose/approve/revert` |
 | Rollout | model version registry, canary, auto-rollback | `di rollout` |
 | Service | config-driven daemon, REST /v1 + MCP | `di serve` |
@@ -385,6 +389,70 @@ The finding worth the whole exercise is the stale feed. A source that stopped
 sending leaves every row valid and the totals quietly not growing — nothing
 errors, and a model built on it looks fine until someone asks why last quarter
 is flat.
+
+## Day 2 — the day after you leave
+
+The most common way this work dies is not a bad model. It is that nothing tells
+the team when the thing has quietly stopped being true: a column gets renamed, a
+feed stops, someone changes a definition that turned out to be load-bearing. The
+answers keep coming out clean and wrong.
+
+```bash
+di handover   # writes RUNBOOK.md and a CI workflow beside the engagement
+di drift      # exits non-zero when something needs attention
+di adoption   # who used it, and which metrics nobody ever asks for
+```
+
+`di drift` checks the three failures that produce clean-looking wrong answers
+instead of errors:
+
+```
+DRIFT — 1 column(s) gone, 1 feed(s) stopped, 1 metric(s) no longer match their control
+  stores.city is gone, used by store_city — every query grouping on it now fails
+  legacy_synced_at stops at 2025-12-01 (245 days ago) — totals over it are quietly no longer growing
+  order_count = 2001, its control says 2000 (anchored to customer-report)
+```
+
+Each line says what to do about it. A monitor that reports only "drift detected"
+hands the reader a search problem at the worst possible moment.
+
+`di adoption` reads the audit trail back. The valuable half is the negative:
+
+```
+## Modelled and never asked for (2)
+Each of these was defined, argued about, and checked. In 30 days nobody has
+asked for one. That is either work that should not have been done, or a
+metric nobody knows exists — worth finding out which before modelling more.
+```
+
+## Feeding the gaps back
+
+An engineer who finishes and leaves is a consultant. What makes the next
+delivery cheaper is recording what the product could not do, and counting it:
+
+```yaml
+# in engagement.yaml
+delta:
+  - kind: missing-feature
+    what: the customer's fiscal year starts in April; the compiler only knows calendar years
+    workaround: a separate fiscal_period dimension maintained by hand
+```
+
+```bash
+di delta -root ~/engagements
+```
+
+```
+### the customer's fiscal year starts in April × 3
+- hit by  Acme, Beta, Gamma
+- worked around with `a hand-maintained fiscal_period dimension`, `copied Acme's approach again`
+```
+
+Once is a workaround. Three times is a missing feature, and the third person to
+hand-roll it is the expensive one. Grouping is by normalised text and nothing
+cleverer: a clustering that guessed would merge gaps that are not the same, and
+an under-counted gap is visible next time somebody reads the list while a wrongly
+merged one becomes a feature request for something nobody needed.
 
 ## The handover document
 

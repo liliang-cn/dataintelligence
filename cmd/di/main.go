@@ -53,6 +53,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/handover"
 	"github.com/liliang-cn/dataintelligence/ingest"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
 	"github.com/liliang-cn/dataintelligence/modelgen"
@@ -135,6 +136,10 @@ func rootCmd() *cobra.Command {
 		leaf("nleval", "model", "NL accuracy gate over the labeled set", runNLEval),
 		leaf("survey", "model", "Site survey: what is actually in a customer's database", runSurvey),
 		leaf("report", "model", "Delivery report: what was modelled and what proves it", runReport),
+		leaf("handover", "model", "Day 2: runbook + CI gate for the customer's team", runHandover),
+		leaf("drift", "model", "Has anything changed underneath the model?", runDrift),
+		leaf("adoption", "model", "Who is using this, and what nobody ever asks for", runAdoption),
+		leaf("delta", "model", "What the product could not do, across engagements", runDelta),
 		leaf("bench", "model", "Public benchmark (Spider): coverage + correctness", runBench),
 		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
 		leaf("rollout", "model", "Version registry, canary, auto-rollback", runRollout),
@@ -3301,4 +3306,185 @@ func runSurvey(argv []string) {
 	for _, f := range rep.Findings {
 		fmt.Fprintf(os.Stderr, "-- %s\n", f)
 	}
+}
+
+// runDrift is the Day 2 check: has anything changed underneath the model.
+//
+// The three failures it looks for all produce clean-looking wrong answers
+// rather than errors, which is why they need a command rather than a log.
+func runDrift(argv []string) {
+	fs := flag.NewFlagSet("drift", flag.ExitOnError)
+	engFile := fs.String("engagement", "", "engagement.yaml (default: nearest one)")
+	dbID := fs.String("database", "", "which database in the engagement")
+	model := fs.String("model", "", "semantic model YAML (instead of an engagement)")
+	dsn := fs.String("dsn", "", "warehouse DSN (instead of an engagement)")
+	stale := fs.Duration("stale-after", 30*24*time.Hour, "flag a time dimension whose newest row is older than this")
+	_ = fs.Parse(argv)
+
+	name, m, d, r := "", *model, *dsn, ""
+	if m == "" || d == "" {
+		if n, em, ed, er, _, _, ok := fromEngagement(*engFile, *dbID); ok {
+			name, m, d, r = n, em, ed, er
+		}
+	}
+	if m == "" {
+		fail(fmt.Errorf("drift needs a modelled database — an unmodelled one has nothing to drift from"))
+	}
+
+	ctx := context.Background()
+	eng, err := engine.New(ctx, m, d)
+	if err != nil {
+		fail(err)
+	}
+	defer eng.Close()
+
+	var set *nleval.ReconSet
+	if r == "" {
+		r = nleval.ReconPathFor(m)
+	}
+	if s, serr := nleval.LoadReconSet(r); serr == nil {
+		set = s
+	}
+
+	drift, err := handover.Check(ctx, eng, set, *stale)
+	if err != nil {
+		fail(err)
+	}
+	drift.Database = name
+	drift.WriteText(os.Stdout)
+	if !drift.Clean() {
+		os.Exit(1) // usable as a scheduled job or a CI step
+	}
+}
+
+// runHandover writes what the customer's team is left holding.
+func runHandover(argv []string) {
+	fs := flag.NewFlagSet("handover", flag.ExitOnError)
+	engFile := fs.String("engagement", "", "engagement.yaml (default: nearest one)")
+	out := fs.String("out", "", "write the runbook here (default: <engagement dir>/RUNBOOK.md)")
+	workflow := fs.String("workflow", "", "write the CI gate here (default: <engagement dir>/.github/workflows/di-gate.yml)")
+	core := fs.String("core", "", "where the service runs, for the runbook")
+	_ = fs.Parse(argv)
+
+	path, err := engagement.Find(*engFile)
+	if err != nil {
+		fail(err)
+	}
+	e, err := engagement.Load(path)
+	if err != nil {
+		fail(err)
+	}
+	rb := &handover.Runbook{E: e, CoreAddr: *core}
+
+	if *out == "" {
+		*out = filepath.Join(e.Dir(), "RUNBOOK.md")
+	}
+	var buf strings.Builder
+	rb.WriteMarkdown(&buf)
+	if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "-- wrote %s\n", *out)
+
+	if *workflow == "" {
+		*workflow = filepath.Join(e.Dir(), ".github", "workflows", "di-gate.yml")
+	}
+	if err := os.MkdirAll(filepath.Dir(*workflow), 0o755); err != nil {
+		fail(err)
+	}
+	if err := os.WriteFile(*workflow, []byte(rb.WorkflowYAML()), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "-- wrote %s\n", *workflow)
+
+	modelled, total := e.Modelled()
+	if modelled < total {
+		fmt.Fprintf(os.Stderr, "-- %d of %d database(s) are still unmodelled; the runbook says so\n", total-modelled, total)
+	}
+}
+
+// runAdoption reads the audit trail back: who used this, and what nobody asked for.
+func runAdoption(argv []string) {
+	fs := flag.NewFlagSet("adoption", flag.ExitOnError)
+	engFile := fs.String("engagement", "", "engagement.yaml (default: nearest one)")
+	dbID := fs.String("database", "", "which database in the engagement")
+	model := fs.String("model", "", "semantic model YAML (instead of an engagement)")
+	dsn := fs.String("dsn", "", "warehouse DSN (instead of an engagement)")
+	days := fs.Int("days", 30, "window to report on")
+	out := fs.String("out", "", "write markdown here (default: stdout)")
+	_ = fs.Parse(argv)
+
+	name, m, d := "", *model, *dsn
+	if d == "" {
+		if n, em, ed, _, _, _, ok := fromEngagement(*engFile, *dbID); ok {
+			name, m, d = n, em, ed
+		}
+	}
+	ctx := context.Background()
+	eng, err := engine.New(ctx, m, d)
+	if err != nil {
+		fail(err)
+	}
+	defer eng.Close()
+
+	a, err := handover.Measure(ctx, eng, name, *days)
+	if err != nil {
+		fail(err)
+	}
+	var buf strings.Builder
+	a.WriteMarkdown(&buf)
+	if *out == "" {
+		fmt.Print(buf.String())
+	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "-- %s\n", a.Summary())
+}
+
+// runDelta rolls up what the product could not do, across every engagement.
+//
+// This is the loop that separates a forward-deployed engineer from a
+// consultant, and it only works if somebody reads it: a gap recorded once in a
+// customer's repository and never counted is the same as not having recorded it.
+func runDelta(argv []string) {
+	fs := flag.NewFlagSet("delta", flag.ExitOnError)
+	root := fs.String("root", ".", "directory to scan for engagement.yaml files")
+	out := fs.String("out", "", "write markdown here (default: stdout)")
+	jsonOut := fs.String("json", "", "also write the machine-readable rollup here")
+	_ = fs.Parse(argv)
+
+	paths, err := handover.FindEngagements(*root)
+	if err != nil {
+		fail(err)
+	}
+	var loaded []*engagement.Engagement
+	for _, p := range paths {
+		e, lerr := engagement.Load(p)
+		if lerr != nil {
+			// One unreadable engagement must not hide the gaps recorded in the
+			// other nineteen.
+			fmt.Fprintf(os.Stderr, "-- skipped %s: %v\n", p, lerr)
+			continue
+		}
+		loaded = append(loaded, e)
+	}
+	if len(loaded) == 0 {
+		fail(fmt.Errorf("no engagement.yaml found under %s", *root))
+	}
+
+	r := handover.Rollup(loaded)
+	var buf strings.Builder
+	r.WriteMarkdown(&buf)
+	if *out == "" {
+		fmt.Print(buf.String())
+	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
+		fail(err)
+	}
+	if *jsonOut != "" {
+		b, _ := json.MarshalIndent(r, "", "  ")
+		if err := os.WriteFile(*jsonOut, b, 0o644); err != nil {
+			fail(err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "-- %s\n", r.Summary())
 }
