@@ -53,7 +53,12 @@ retrieval); otherwise they fall back to deterministic paths. Without those, the
 For the engineer's own commands (`model gen -llm`, `reconcile -ai`) the model
 can instead be an already-installed coding agent — `DI_AGENT_CLI=claude|codex|
 gemini`, via the `aicli` package over `github.com/liliang-cn/agentcli`. These run
-once, on a laptop, where three seconds of process startup is free. `di serve`
+once, on a laptop, where three seconds of process startup is free.
+`DI_AGENT_CLI_SSH=user@host` runs the agent on another machine instead (plus
+`DI_AGENT_CLI_BIN`, because a non-interactive ssh session's PATH does not
+include `~/.local/bin`). On macOS the agent's credentials are in the Keychain,
+which an ssh session cannot unlock — a remote host has to be Linux, where they
+are a file. `di serve`
 **refuses** the variable rather than ignoring it: a process per question is the
 wrong shape for a request path, and a personal subscription is not a licence to
 be the inference backend of software a customer bought.

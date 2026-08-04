@@ -47,6 +47,16 @@ type Runner struct {
 	Name     string
 	Model    string
 	Timeout  time.Duration
+
+	// SSH runs the agent on another machine: an ssh destination, exactly as
+	// ssh(1) takes it, so a ProxyJump or a bastion is ~/.ssh/config's problem
+	// and not this code's. Empty runs it here.
+	//
+	// The agent must be installed *and authenticated* over there. Nothing here
+	// can check the second half — a logged-out CLI fails at the first call with
+	// its own message, which is the right place for it.
+	SSH     string
+	SSHOpts string
 }
 
 // DefaultTimeout is generous because these are one-shot engineer-time calls and
@@ -58,12 +68,20 @@ const DefaultTimeout = 5 * time.Minute
 //
 //	DI_AGENT_CLI=claude|codex|gemini
 //	DI_AGENT_CLI_MODEL=<optional model override>
+//	DI_AGENT_CLI_SSH=<user@host>   run the agent there instead of here
+//	DI_AGENT_CLI_SSH_OPTS=<flags>  extra ssh flags, space separated
+//	DI_AGENT_CLI_BIN=<path>        the agent's path, for a remote whose
+//	                               non-interactive PATH does not have it
 func FromEnv() (*Runner, bool) {
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("DI_AGENT_CLI")))
 	if name == "" {
 		return nil, false
 	}
 	r, err := New(name, os.Getenv("DI_AGENT_CLI_MODEL"))
+	if r != nil {
+		r.SSH = strings.TrimSpace(os.Getenv("DI_AGENT_CLI_SSH"))
+		r.SSHOpts = strings.TrimSpace(os.Getenv("DI_AGENT_CLI_SSH_OPTS"))
+	}
 	if err != nil {
 		// A misspelled name is worth a word: silently falling back to the
 		// heuristic path produces a draft that looks like the LLM ran.
@@ -75,21 +93,37 @@ func FromEnv() (*Runner, bool) {
 
 // New builds a runner for a named CLI agent.
 func New(name, model string) (*Runner, error) {
+	// A non-interactive ssh session gets a minimal PATH: on a machine where the
+	// agent lives in ~/.local/bin — which is where its installer puts it — the
+	// remote shell reports command-not-found and nothing says why. Naming the
+	// binary is the fix, and it has to be possible.
+	var opts []cliagent.Option
+	if bin := strings.TrimSpace(os.Getenv("DI_AGENT_CLI_BIN")); bin != "" {
+		opts = append(opts, cliagent.WithBinary(bin))
+	}
 	var p cliagent.Provider
 	switch strings.ToLower(name) {
 	case "claude":
-		p = cliagent.NewClaude()
+		p = cliagent.NewClaude(opts...)
 	case "codex":
-		p = cliagent.NewCodex()
+		p = cliagent.NewCodex(opts...)
 	case "gemini":
-		p = cliagent.NewGemini()
+		p = cliagent.NewGemini(opts...)
 	default:
 		return nil, fmt.Errorf("unknown agent CLI (want claude, codex or gemini)")
 	}
-	if _, err := exec.LookPath(strings.ToLower(name)); err != nil {
-		return nil, fmt.Errorf("%s is not on PATH", name)
+	r := &Runner{Provider: p, Name: strings.ToLower(name), Model: model, Timeout: DefaultTimeout}
+	// Only look for the binary when it is meant to be here. With SSH set it
+	// lives on the far side, and refusing to start because the laptop has no
+	// claude installed would be exactly backwards.
+	if os.Getenv("DI_AGENT_CLI_SSH") == "" {
+		if _, err := exec.LookPath(r.Name); err != nil {
+			return r, fmt.Errorf("%s is not on PATH (set DI_AGENT_CLI_SSH to run it on another machine)", name)
+		}
+	} else if _, err := exec.LookPath("ssh"); err != nil {
+		return r, fmt.Errorf("DI_AGENT_CLI_SSH is set but ssh is not on PATH")
 	}
-	return &Runner{Provider: p, Name: strings.ToLower(name), Model: model, Timeout: DefaultTimeout}, nil
+	return r, nil
 }
 
 // Ask returns the runner as the Ask func the rest of the repo takes.
@@ -139,9 +173,25 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("%s: empty command", r.Name)
 	}
 
-	cmd := exec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
-	cmd.Dir = orDefault(spec.WorkDir, dir)
-	cmd.Env = append(os.Environ(), spec.Env...)
+	argv, env, workdir := spec.Argv, append(os.Environ(), spec.Env...), orDefault(spec.WorkDir, dir)
+	if r.SSH != "" {
+		script, serr := remoteScript(spec, dir)
+		if serr != nil {
+			return "", fmt.Errorf("%s: %w", r.Name, serr)
+		}
+		argv, serr = sshArgv(r.SSH, r.SSHOpts, script)
+		if serr != nil {
+			return "", fmt.Errorf("%s: %w", r.Name, serr)
+		}
+		// The remote decides its own environment and working directory; the
+		// local ones would be wrong and the local temp dir does not exist over
+		// there.
+		env, workdir = os.Environ(), ""
+	}
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = workdir
+	cmd.Env = env
 	if len(spec.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}
@@ -168,6 +218,18 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 	}
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("%s: gave up after %s", r.Name, timeout)
+	}
+	// 255 is ssh's own failure, not the agent's. Reported as an agent error it
+	// sends the reader looking at the model instead of at the connection.
+	if r.SSH != "" && exit == 255 {
+		return "", fmt.Errorf("ssh %s: %s", r.SSH, snippet(errBuf.String()))
+	}
+	if r.SSH != "" && exit == 127 {
+		return "", fmt.Errorf(
+			"%s is not on %s's non-interactive PATH — an ssh session without a login shell "+
+				"does not get ~/.local/bin, where the installer puts it. Set DI_AGENT_CLI_BIN "+
+				"to its full path over there. (%s)",
+			r.Name, r.SSH, snippet(errBuf.String()))
 	}
 
 	res, tail, err := sess.Finalize(ctx, out.Bytes(), exit)
@@ -206,8 +268,67 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 	if exit != 0 && len(msgs) == 0 {
 		return "", fmt.Errorf("%s: exit %d: %s", r.Name, exit, snippet(text))
 	}
+	// The provider's own verdict first. A revoked token produces an assistant
+	// message, is_error on the result frame, and exit zero — so neither the
+	// text nor the exit code catches it, and the text of the "answer" would go
+	// straight into a customer's model file.
+	if res.Failed {
+		return "", fmt.Errorf("%s%s failed: %s", r.Name, r.where(), hint(text))
+	}
+	if why := notAnAnswer(text); why != "" {
+		return "", fmt.Errorf("%s%s: %s", r.Name, r.where(), why)
+	}
 	return text, nil
 }
+
+// where names the machine, so a failure that only happens remotely says so.
+func (r *Runner) where() string {
+	if r.SSH == "" {
+		return ""
+	}
+	return " on " + r.SSH
+}
+
+// notAnAnswer is the fallback for providers with no failure signal.
+//
+// Codex and Gemini do not report a verdict — Result.Failed is only ever set by
+// Claude — so for those two a short reply that is plainly an error message is
+// all there is to go on. Matching on text is fragile and will miss new
+// wordings; it is still the right trade, because a missed case leaves today's
+// behaviour and a caught one turns a silent corruption into a message that
+// names the fix.
+func notAnAnswer(text string) string {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if len(t) > 200 {
+		return "" // a real answer that happens to mention logging in
+	}
+	switch {
+	case strings.Contains(t, "not logged in"), strings.Contains(t, "please run /login"):
+		return authHint
+	case strings.Contains(t, "failed to authenticate"), strings.Contains(t, "invalid api key"),
+		strings.Contains(t, "authentication_error"), strings.Contains(t, "access token"):
+		return "the agent rejected its credentials: " + strings.TrimSpace(text)
+	case strings.Contains(t, "usage limit") && strings.Contains(t, "reached"):
+		return "the agent is rate limited: " + strings.TrimSpace(text)
+	}
+	return ""
+}
+
+// hint adds the one piece of context the message cannot carry: why a working
+// local agent stops working over ssh.
+func hint(text string) string {
+	t := strings.ToLower(text)
+	if strings.Contains(t, "not logged in") || strings.Contains(t, "authenticate") ||
+		strings.Contains(t, "access token") {
+		return strings.TrimSpace(text) + "\n  " + authHint
+	}
+	return snippet(text)
+}
+
+// authHint is the failure that only happens remotely, and only on macOS.
+const authHint = "the agent is not authenticated there. On macOS its credentials live in the " +
+	"Keychain, which an ssh session cannot unlock; on Linux they are a file in ~/.claude. " +
+	"Log in on that host, or run the agent locally."
 
 func orDefault(s, def string) string {
 	if s == "" {
