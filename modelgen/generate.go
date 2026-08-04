@@ -68,7 +68,8 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 		m.Metrics = append(m.Metrics, semantic.Metric{
 			Name: ent + "_count", Entity: ent, Agg: "count_distinct", Expr: pk,
 			Description: fmt.Sprintf("Number of distinct %s (auto-generated; review).", ent),
-			Synonyms:    []string{ent + " count", "number of " + t.Name}, Additivity: semantic.NonAdditive,
+			Synonyms:    []string{ent + " count", "number of " + t.Name},
+			Additivity:  semantic.NonAdditive,
 		})
 
 		var measures []string // the numeric columns that are actually measures
@@ -115,6 +116,11 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 	if len(m.Entities) == 0 {
 		return nil, fmt.Errorf("no modelable tables found (need a primary key)")
 	}
+	// Structure first, governance second — and governance in exactly one place.
+	// The metrics above are built at five sites (count, sum, margin, per-unit,
+	// yields); asking each to remember synonyms, masks and roles is asking for
+	// the sixth one to forget.
+	curate(m)
 	if err := m.Index(); err != nil {
 		return nil, fmt.Errorf("generated model is invalid: %w", err)
 	}
