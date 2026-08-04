@@ -45,6 +45,7 @@ import (
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/spf13/cobra"
 
+	"github.com/liliang-cn/dataintelligence/aicli"
 	"github.com/liliang-cn/dataintelligence/anchor"
 	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/connectors"
@@ -194,6 +195,21 @@ func runServe(argv []string) {
 	model := fs.String("model", "models/meridian.yaml", "semantic model (used only if no config file)")
 	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN (used only if no config file)")
 	_ = fs.Parse(argv)
+
+	// A coding-agent CLI is for the engineer's own commands, never for the
+	// service. Refusing loudly beats ignoring the variable: an operator who set
+	// it expects it to be in use, and a service that silently answered from a
+	// different model than the one they configured is the worst version of
+	// this.
+	if name := os.Getenv("DI_AGENT_CLI"); name != "" {
+		fail(fmt.Errorf("DI_AGENT_CLI=%s is set, and `di serve` will not use it.\n"+
+			"  A CLI agent spawns a process per question (seconds, not milliseconds, and one\n"+
+			"  process per concurrent user), and a personal Claude Code or Codex subscription\n"+
+			"  is not a licence to be the inference backend of software somebody bought — the\n"+
+			"  product would stop working the day that subscription lapses.\n"+
+			"  Use LLM_BASE_URL/LLM_API_KEY/LLM_MODEL here; point them at the customer's own\n"+
+			"  endpoint or a model inside their network. Unset DI_AGENT_CLI to start.", name))
+	}
 
 	// Config-driven when the file exists; otherwise synthesize from flags/env so
 	// `di serve` still works out of the box.
@@ -553,9 +569,9 @@ func runModelGen(argv []string) {
 	var ask modelgen.AskFunc
 	mode := "heuristic"
 	if *useLLM {
-		if svc, lerr := llm.NewOpenAIFromEnv(); lerr == nil {
-			ask = svc.Ask
-			mode = "heuristic + LLM refine"
+		if a, name, ok := engineerLLM(); ok {
+			ask = modelgen.AskFunc(a)
+			mode = "heuristic + " + name
 		}
 	}
 	model, issues, err := modelgen.Generate(ctx, schema, ask)
@@ -641,9 +657,9 @@ func runReconcile(argv []string) {
 	var ask reconcile.AskFunc
 	mode := "detection only"
 	if *ai {
-		if svc, lerr := llm.NewOpenAIFromEnv(); lerr == nil {
-			ask = svc.Ask
-			mode = "detection + LLM triage"
+		if a, name, ok := engineerLLM(); ok {
+			ask = reconcile.AskFunc(a)
+			mode = "detection + " + name + " triage"
 		}
 	}
 	results, err := reconcile.Run(ctx, wh, cs, ask)
@@ -3486,6 +3502,27 @@ func fromEngagement(engPath, dbID string) (name, model, dsn, recon, evalset, rep
 // The schema diagram is out of date, one feed stopped six months ago, and a
 // third of the foreign keys point at rows that do not exist. None of that shows
 // up in a schema dump, and all of it decides what can be modelled.
+// engineerLLM resolves the model behind a command an engineer runs by hand.
+//
+// A coding-agent CLI first, when one is asked for: it is already installed and
+// already authenticated, and these calls happen once, on a laptop, where three
+// seconds of process startup costs nothing. Otherwise the ordinary API path.
+//
+// This deliberately has no caller in `di serve`. See the aicli package comment
+// for why — latency, concurrency, and the fact that a personal Claude Code or
+// Codex subscription is not a licence to be the inference backend of software
+// somebody bought.
+func engineerLLM() (aicli.Ask, string, bool) {
+	if r, ok := aicli.FromEnv(); ok {
+		return r.Ask(), r.Name, true
+	}
+	if svc, err := llm.NewOpenAIFromEnv(); err == nil {
+		return svc.Ask, "LLM", true
+	}
+	fmt.Fprintln(os.Stderr, "-- no model configured: set DI_AGENT_CLI=claude|codex, or LLM_BASE_URL/LLM_API_KEY/LLM_MODEL")
+	return nil, "", false
+}
+
 func runSurvey(argv []string) {
 	fs := flag.NewFlagSet("survey", flag.ExitOnError)
 	eng := fs.String("engagement", "", "engagement.yaml (default: nearest one)")

@@ -50,6 +50,14 @@ di pentest     # MCP security regression (forged-token battery)
 retrieval); otherwise they fall back to deterministic paths. Without those, the
 10 `needs_llm` eval cases are skipped, grounding uses the keyword matcher, etc.
 
+For the engineer's own commands (`model gen -llm`, `reconcile -ai`) the model
+can instead be an already-installed coding agent — `DI_AGENT_CLI=claude|codex|
+gemini`, via the `aicli` package over `github.com/liliang-cn/agentcli`. These run
+once, on a laptop, where three seconds of process startup is free. `di serve`
+**refuses** the variable rather than ignoring it: a process per question is the
+wrong shape for a request path, and a personal subscription is not a licence to
+be the inference backend of software a customer bought.
+
 ## Architecture
 
 The request path (each hop has an owner; governance applies on every hop):

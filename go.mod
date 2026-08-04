@@ -6,6 +6,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/liliang-cn/agent-go/v2 v2.107.0
+	github.com/liliang-cn/agentcli v0.1.2
 	github.com/liliang-cn/cortexdb/v2 v2.51.0
 	github.com/liliang-cn/eval-go v0.4.0
 	github.com/liliang-cn/semantic-go v0.1.7
@@ -61,7 +62,7 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 // indirect
 	github.com/chromedp/chromedp v0.14.1 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
-	github.com/creack/pty v1.1.21 // indirect
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dop251/goja v0.0.0-20260226184354-913bd86fb70c // indirect
 	github.com/dslipak/pdf v0.0.2 // indirect
