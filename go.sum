@@ -212,6 +212,8 @@ github.com/liliang-cn/agent-go/v2 v2.107.0 h1:8OJhoDvhV5F8WUVUYA0Jy6DDSjdv9M5Pyo
 github.com/liliang-cn/agent-go/v2 v2.107.0/go.mod h1:vznqnwRi7oq3PetMb2IX3FNVTOHjWw8c1l3n3mXlqGg=
 github.com/liliang-cn/agentcli v0.1.2 h1:sTmQmpw2iEfBDNQ5KPMGA4wkddjerZL9R79dnlYG5JA=
 github.com/liliang-cn/agentcli v0.1.2/go.mod h1:mYOQB07cYq67fFYU08J6RT9xVKQhyX/P4VnhYYu57Uc=
+github.com/liliang-cn/agentcli v0.1.3 h1:AzrfePHWGdEnzQSZQrlaqt79ux9ZR0Ik1jb8SNGfs4Y=
+github.com/liliang-cn/agentcli v0.1.3/go.mod h1:mYOQB07cYq67fFYU08J6RT9xVKQhyX/P4VnhYYu57Uc=
 github.com/liliang-cn/cortexdb/v2 v2.51.0 h1:ugdQVfRxjE3aB6lfYp3Ozhus43IVLi1eEYbB9+Qm1Ss=
 github.com/liliang-cn/cortexdb/v2 v2.51.0/go.mod h1:O4EPYRbBsEpEsRisT2Hs2jhKVoEMPuRm87xAXpwLMwc=
 github.com/liliang-cn/eval-go v0.4.0 h1:qMkhS0XrvWn4nCI+KlJWnEPPSkUX4CemCudV9cX7x7c=

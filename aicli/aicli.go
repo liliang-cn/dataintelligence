@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,8 +123,14 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 		Prompt:        prompt,
 		WorkspacePath: dir,
 		Model:         r.Model,
-		ExtraArgs:     r.quietArgs(dir),
-		Sandbox:       false,
+		// No MCP servers. Booting the operator's own took longer than the model
+		// spent thinking, and a call that can reach them is not reproducible in
+		// any sense. The built-in tools cannot be turned off from the command
+		// line — `--allowed-tools ""` is accepted and changes nothing — so what
+		// keeps them from mattering is the empty working directory and the
+		// prompt: in print mode a write is denied rather than granted silently.
+		NoMCP:   true,
+		Sandbox: false,
 	})
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", r.Name, err)
@@ -174,12 +179,21 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 	// Prefer the assistant's messages over the summary. The summary is the
 	// CLI's own account of the session; the messages are what the model said,
 	// and this call exists to get what the model said.
+	// Filter on the role, not on whether a text field happens to be present.
+	// Claude's system init, its hook events and the result summary all arrive
+	// as agent.message — one trivial call produced eleven of them, ten being
+	// hook lifecycle. They carry "raw" rather than "text", so checking for text
+	// works today by coincidence and not by contract.
 	var msgs []string
 	for _, e := range events {
-		if e.Type == cliagent.EventAgentMessage {
-			if t, _ := e.Payload["text"].(string); strings.TrimSpace(t) != "" {
-				msgs = append(msgs, t)
-			}
+		if e.Type != cliagent.EventAgentMessage {
+			continue
+		}
+		if role, _ := e.Payload["role"].(string); role != "" && role != "assistant" {
+			continue
+		}
+		if t, _ := e.Payload["text"].(string); strings.TrimSpace(t) != "" {
+			msgs = append(msgs, t)
 		}
 	}
 	text := strings.TrimSpace(strings.Join(msgs, "\n"))
@@ -193,39 +207,6 @@ func (r *Runner) ask(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("%s: exit %d: %s", r.Name, exit, snippet(text))
 	}
 	return text, nil
-}
-
-// quietArgs strips the agent down towards a completion.
-//
-// MCP is the part that matters and the part that works: booting every
-// configured server took longer than the model spent thinking, and a call that
-// reaches the engineer's own MCP servers is not reproducible in any sense. An
-// empty config plus the strict flag brings it to zero, measurably.
-//
-// The built-in tools cannot be turned off from the command line — `--allowed
-// -tools ""` is accepted and changes nothing, so it is not passed: a flag that
-// looks like it disables something and does not is worse than no flag. What
-// stops them mattering is the empty working directory and the prompt. In print
-// mode a write is denied rather than granted silently, so the worst case is an
-// answer saying it could not write the file, which is visible.
-//
-// The config path goes before the strict flag on purpose: --mcp-config is
-// variadic, and given the JSON inline it swallowed the prompt as a second
-// config path and failed with a file-not-found naming the whole prompt.
-func (r *Runner) quietArgs(dir string) []string {
-	switch r.Name {
-	case "claude":
-		path := filepath.Join(dir, "mcp.json")
-		if err := os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
-			return nil
-		}
-		return []string{"--mcp-config", path, "--strict-mcp-config"}
-	default:
-		// Codex and Gemini already get their headless flags from the provider.
-		// Adding --skip-git-repo-check here passed it twice, and clap rejects a
-		// repeated flag outright.
-		return nil
-	}
 }
 
 func orDefault(s, def string) string {
