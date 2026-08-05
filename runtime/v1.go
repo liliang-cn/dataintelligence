@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	semantic "github.com/liliang-cn/semantic-go"
@@ -699,6 +701,13 @@ func (v *V1) databaseModelPutV1(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		YAML string `json:"yaml"`
+		// Only names the single metric or dimension this edit is allowed to
+		// touch. Optional, and the reason it exists is that the edit is often
+		// produced by a model: asked to add one description it returns the whole
+		// file, and a file it rewrote is a file it may have quietly changed
+		// elsewhere. A dropped metric parses, indexes, and serves — the failure
+		// shows up as a question nobody can ask any more, weeks later.
+		Only string `json:"only"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
@@ -717,6 +726,23 @@ func (v *V1) databaseModelPutV1(w http.ResponseWriter, r *http.Request) {
 	if err := m.Index(); err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	if body.Only != "" {
+		prev, err := os.ReadFile(def.Model)
+		if err != nil {
+			writeErr(w, 400, errString("cannot scope an edit against a model that isn't there yet"))
+			return
+		}
+		before, err := semantic.Load(prev)
+		if err != nil {
+			writeErr(w, 400, errString("the model on disk no longer parses; edit it whole"))
+			return
+		}
+		if changed := changedOutside(before, m, body.Only); len(changed) > 0 {
+			writeErr(w, 409, errString(fmt.Sprintf(
+				"this edit was scoped to %q but also changed: %s", body.Only, strings.Join(changed, ", "))))
+			return
+		}
 	}
 
 	path := def.Model
@@ -752,6 +778,84 @@ func (v *V1) databaseModelPutV1(w http.ResponseWriter, r *http.Request) {
 		"entities": len(m.Entities), "dimensions": len(m.Dimensions), "metrics": len(m.Metrics),
 		"issues": lintJSON(m),
 	})
+}
+
+// changedOutside reports every named part of the model that differs between two
+// versions, other than `only`. Names appearing or disappearing count: an edit
+// that drops a metric is exactly the failure this exists to catch.
+//
+// Comparison is on the parsed model, not the text, so reformatting, reordering
+// and comment edits are free — which they should be, since the file is also
+// hand-edited and carries the modeller's notes.
+func changedOutside(before, after *semantic.Model, only string) []string {
+	var out []string
+
+	metrics := func(m *semantic.Model) map[string]semantic.Metric {
+		byName := map[string]semantic.Metric{}
+		for _, x := range m.Metrics {
+			byName[x.Name] = x
+		}
+		return byName
+	}
+	dims := func(m *semantic.Model) map[string]semantic.Dimension {
+		byName := map[string]semantic.Dimension{}
+		for _, x := range m.Dimensions {
+			byName[x.Name] = x
+		}
+		return byName
+	}
+
+	b, a := metrics(before), metrics(after)
+	for name, x := range b {
+		if name == only {
+			continue
+		}
+		y, ok := a[name]
+		if !ok {
+			out = append(out, "metric "+name+" (removed)")
+		} else if !reflect.DeepEqual(x, y) {
+			out = append(out, "metric "+name)
+		}
+	}
+	for name := range a {
+		if name != only {
+			if _, ok := b[name]; !ok {
+				out = append(out, "metric "+name+" (added)")
+			}
+		}
+	}
+
+	bd, ad := dims(before), dims(after)
+	for name, x := range bd {
+		if name == only {
+			continue
+		}
+		y, ok := ad[name]
+		if !ok {
+			out = append(out, "dimension "+name+" (removed)")
+		} else if !reflect.DeepEqual(x, y) {
+			out = append(out, "dimension "+name)
+		}
+	}
+	for name := range ad {
+		if name != only {
+			if _, ok := bd[name]; !ok {
+				out = append(out, "dimension "+name+" (added)")
+			}
+		}
+	}
+
+	// Entities and joins are the shape of the warehouse, not an opinion about
+	// it. A scoped edit has no business touching them at all.
+	if !reflect.DeepEqual(before.Entities, after.Entities) {
+		out = append(out, "entities")
+	}
+	if !reflect.DeepEqual(before.Joins, after.Joins) {
+		out = append(out, "joins")
+	}
+
+	sort.Strings(out)
+	return out
 }
 
 // lintJSON renders lint issues as objects rather than the CLI's formatted lines,
