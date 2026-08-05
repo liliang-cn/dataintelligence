@@ -7,7 +7,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/liliang-cn/agent-go/v2 v2.107.0
 	github.com/liliang-cn/agentcli v0.1.4
-	github.com/liliang-cn/cortexdb/v2 v2.51.0
+	github.com/liliang-cn/cortexdb/v2 v2.63.2
 	github.com/liliang-cn/eval-go v0.4.0
 	github.com/liliang-cn/semantic-go v0.1.7
 	github.com/marcboeker/go-duckdb v1.8.5
