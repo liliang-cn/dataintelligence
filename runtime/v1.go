@@ -82,6 +82,8 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/databases", v.databaseAddV1)
 	mux.HandleFunc("DELETE /v1/databases/{id}", v.databaseDeleteV1)
 	mux.HandleFunc("POST /v1/databases/{id}/model", v.databaseModelV1)
+	mux.HandleFunc("GET /v1/databases/{id}/model", v.databaseModelGetV1)
+	mux.HandleFunc("PUT /v1/databases/{id}/model", v.databaseModelPutV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
@@ -619,4 +621,147 @@ func (v *V1) databaseModelV1(w http.ResponseWriter, r *http.Request) {
 		"dimensions": len(model.Dimensions), "entities": len(model.Entities),
 		"notes": notes,
 	})
+}
+
+// databaseModelGetV1 returns the semantic model a database is served with, plus
+// its lint issues.
+//
+// Generating a draft was already possible; reading one back was not, so the only
+// way to review or correct a generated model was to find the file on the box and
+// edit it there. That is fine for the person who deployed it and impossible for
+// anyone else — and reviewing the draft is the whole job. The issues ride along
+// because "what is wrong with this model" and "what is this model" are the same
+// question while someone is fixing it.
+func (v *V1) databaseModelGetV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	def, ok := v.DBs.Def(id)
+	if !ok {
+		writeErr(w, 404, errString(fmt.Sprintf("unknown database %q", id)))
+		return
+	}
+	if def.Model == "" {
+		writeErr(w, 404, errString(fmt.Sprintf(
+			"database %q has no semantic model — generate one with POST /v1/databases/%s/model", id, id)))
+		return
+	}
+	raw, err := os.ReadFile(def.Model)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	m, err := semantic.Load(raw)
+	if err != nil {
+		// The file on disk no longer parses. Say so with the YAML still attached:
+		// whoever is looking needs to see the text to fix it.
+		writeJSON(w, 200, map[string]any{
+			"database": id, "path": def.Model, "yaml": string(raw),
+			"error": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"database": id, "path": def.Model, "yaml": string(raw),
+		"entities": len(m.Entities), "dimensions": len(m.Dimensions), "metrics": len(m.Metrics),
+		"issues": lintJSON(m),
+	})
+}
+
+// databaseModelPutV1 replaces a database's semantic model and reloads it.
+//
+// The model is parsed and indexed BEFORE anything is written. A semantic model
+// is the only thing standing between an agent and the warehouse; writing one
+// that does not compile would take the database down, and it would do it at the
+// moment someone was trying to improve it. A rejected edit costs a round trip.
+//
+// The previous version is kept beside the file. Editing a metric's meaning is
+// not a formatting change — someone will want the old wording back, and "restore
+// from the box" is not something a person on a customer site can do.
+func (v *V1) databaseModelPutV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	def, ok := v.DBs.Def(id)
+	if !ok {
+		writeErr(w, 404, errString(fmt.Sprintf("unknown database %q", id)))
+		return
+	}
+	var body struct {
+		YAML string `json:"yaml"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(body.YAML) == "" {
+		writeErr(w, 400, errString("yaml is required"))
+		return
+	}
+
+	m, err := semantic.Load([]byte(body.YAML))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := m.Index(); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+
+	path := def.Model
+	if path == "" {
+		dir := v.DBs.ModelsDir()
+		if dir == "" || !v.DBs.CanRegister() {
+			writeErr(w, 403, errString(
+				"this database has no model file and models_dir is not configured"))
+			return
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		path = filepath.Join(dir, id+".yaml")
+	} else if prev, err := os.ReadFile(path); err == nil {
+		_ = os.WriteFile(path+".prev", prev, 0o600)
+	}
+	if err := os.WriteFile(path, []byte(body.YAML), 0o600); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+
+	// Re-registering is what makes the edit live; without it the process keeps
+	// serving the model it loaded at boot and the edit appears to do nothing.
+	def.Model = path
+	if err := v.DBs.Register(r.Context(), def); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "database": id, "path": path,
+		"entities": len(m.Entities), "dimensions": len(m.Dimensions), "metrics": len(m.Metrics),
+		"issues": lintJSON(m),
+	})
+}
+
+// lintJSON renders lint issues as objects rather than the CLI's formatted lines,
+// so a caller can group them by target or act on one.
+func lintJSON(m *semantic.Model) []map[string]string {
+	out := []map[string]string{}
+	for _, is := range semantic.Lint(m) {
+		out = append(out, map[string]string{
+			"severity": is.Severity, "target": is.Target, "message": is.Message,
+		})
+	}
+	return out
 }
