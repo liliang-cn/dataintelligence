@@ -10,17 +10,22 @@ import (
 	"reflect"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 
+	"github.com/liliang-cn/dataintelligence/anchor"
 	"github.com/liliang-cn/dataintelligence/branch"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
 	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/obs"
+	"github.com/liliang-cn/dataintelligence/reconcile"
+	"github.com/liliang-cn/dataintelligence/survey"
 	"github.com/liliang-cn/dataintelligence/warehouse"
 )
 
@@ -86,6 +91,9 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/databases/{id}/model", v.databaseModelV1)
 	mux.HandleFunc("GET /v1/databases/{id}/model", v.databaseModelGetV1)
 	mux.HandleFunc("PUT /v1/databases/{id}/model", v.databaseModelPutV1)
+	mux.HandleFunc("POST /v1/databases/{id}/survey", v.databaseSurveyV1)
+	mux.HandleFunc("POST /v1/databases/{id}/anchor", v.databaseAnchorV1)
+	mux.HandleFunc("POST /v1/databases/{id}/eval", v.databaseEvalV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
@@ -778,6 +786,197 @@ func (v *V1) databaseModelPutV1(w http.ResponseWriter, r *http.Request) {
 		"entities": len(m.Entities), "dimensions": len(m.Dimensions), "metrics": len(m.Metrics),
 		"issues": lintJSON(m),
 	})
+}
+
+// databaseSurveyV1 profiles what is actually in a customer's database.
+//
+// This is the first thing anyone does on site and until now it was CLI-only,
+// which meant the finding that matters most — a feed that stopped three months
+// ago — was visible only to whoever had a shell on the box.
+//
+// The cost bounds are not tuning knobs. A survey runs against production on day
+// one, the worst possible moment to be the reason it got slow, so orphan probes
+// are off by default here and large tables are sampled.
+func (v *V1) databaseSurveyV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	eng, _, err := v.DBs.Resolve(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	var body struct {
+		SkipOrphans *bool `json:"skip_orphans"`
+		SampleAbove int64 `json:"sample_above"`
+		SampleRows  int64 `json:"sample_rows"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	skip := true
+	if body.SkipOrphans != nil {
+		skip = *body.SkipOrphans
+	}
+	if body.SampleAbove == 0 {
+		body.SampleAbove = 2_000_000
+	}
+	if body.SampleRows == 0 {
+		body.SampleRows = 50_000
+	}
+	rep, err := survey.Run(r.Context(), eng.WH, id, survey.Options{
+		MaxDistinct: 200,
+		StaleAfter:  90 * 24 * time.Hour,
+		SkipOrphans: skip,
+		SampleAbove: body.SampleAbove,
+		SampleRows:  body.SampleRows,
+	})
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, rep)
+}
+
+// databaseAnchorV1 finds which scope of a metric reproduces a figure the
+// customer already publishes.
+//
+// Every control query until now was written by whoever wrote the metric, from
+// the same understanding — so they agreed, and agreement is not correctness.
+// This is what lets a delivery report say VERIFIED instead of SELF-CONSISTENT.
+//
+// `figure` is taken as written, not as a number: a customer who writes 97.3%
+// has told you the precision they have, and the right window is half of the
+// last digit. A fixed tolerance is wrong in both directions — too tight and the
+// real scope never appears, too loose and everything matches, which is the same
+// as nothing matching but reads like success.
+func (v *V1) databaseAnchorV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	eng, _, ok := v.resolveGoverned(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Metric string  `json:"metric"`
+		Figure string  `json:"figure"`
+		Target float64 `json:"target"`
+		Tol    float64 `json:"tol"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if strings.TrimSpace(body.Metric) == "" {
+		writeErr(w, 400, errString("metric is required"))
+		return
+	}
+	target, tol := body.Target, body.Tol
+	if body.Figure != "" {
+		digits, mult, err := parseFigure(body.Figure)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		target = digits * mult
+		if tol == 0 {
+			// 精度读在**数字部分**上,再按同一个倍数放大:写「2610.3万」的人
+			// 声明的精度是 0.1 万,不是 0.1 元。在 26,103,000 上用 0.05 的容差,
+			// 什么都匹配不上,而那看起来和"模型建错了"一模一样。
+			tol = anchor.ToleranceOf(digitsOf(body.Figure)) * mult
+		}
+	}
+	res, err := anchor.Search(r.Context(), eng, body.Metric, target, anchor.Options{Tol: tol})
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, res)
+}
+
+// parseFigure reads a customer-written figure: "97.3%", "2,610.3", "26.1万".
+// Returns the digits and the unit multiplier separately, because the precision
+// the customer declared lives in the digits and the scale does not.
+func parseFigure(s string) (float64, float64, error) {
+	t := digitsOf(s)
+	mult := 1.0
+	switch {
+	case strings.HasSuffix(strings.TrimSpace(s), "万"):
+		mult = 10_000
+	case strings.HasSuffix(strings.TrimSpace(s), "亿"):
+		mult = 100_000_000
+	}
+	f, err := strconv.ParseFloat(t, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("看不懂这个数字 %q", s)
+	}
+	return f, mult, nil
+}
+
+// digitsOf strips grouping commas and the unit suffix, leaving what the
+// customer actually wrote as a number.
+func digitsOf(s string) string {
+	t := strings.TrimSpace(s)
+	t = strings.ReplaceAll(t, ",", "")
+	for _, suf := range []string{"%", "万", "亿", "元"} {
+		t = strings.TrimSuffix(t, suf)
+	}
+	return strings.TrimSpace(t)
+}
+
+// databaseEvalV1 runs the reconciliation set: every metric against a control
+// query somebody wrote by hand, and anything that disagrees is a finding.
+//
+// The set lives beside the model as <model>.recon.yaml. Absent is not an error
+// worth a 500 — it is the normal state before anyone has written one — so it
+// comes back as an empty result saying where to put it.
+func (v *V1) databaseEvalV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	def, ok := v.DBs.Def(id)
+	if !ok {
+		writeErr(w, 404, errString(fmt.Sprintf("unknown database %q", id)))
+		return
+	}
+	if def.Model == "" {
+		writeErr(w, 409, errString("this database has no semantic model, so there is nothing to reconcile"))
+		return
+	}
+	// 对照集就放在模型旁边:同一次交付里两份东西,分开放迟早会对不上。
+	path := ""
+	if path == "" {
+		path = strings.TrimSuffix(def.Model, filepath.Ext(def.Model)) + ".recon.yaml"
+	}
+	cs, err := reconcile.Load(path)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{
+			"database": id, "path": path, "results": []any{},
+			"note": fmt.Sprintf("还没有对照集。写一份放在 %s,每条指标配一句人工写的 SQL。", path),
+		})
+		return
+	}
+	eng, _, err := v.DBs.Resolve(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	results, err := reconcile.Run(r.Context(), eng.WH, cs, nil)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"database": id, "path": path, "results": results})
 }
 
 // changedOutside reports every named part of the model that differs between two
