@@ -22,7 +22,9 @@ import (
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/handover"
 	"github.com/liliang-cn/dataintelligence/modelgen"
+	"github.com/liliang-cn/dataintelligence/nleval"
 	"github.com/liliang-cn/dataintelligence/obs"
 	"github.com/liliang-cn/dataintelligence/reconcile"
 	"github.com/liliang-cn/dataintelligence/survey"
@@ -94,6 +96,8 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/databases/{id}/survey", v.databaseSurveyV1)
 	mux.HandleFunc("POST /v1/databases/{id}/anchor", v.databaseAnchorV1)
 	mux.HandleFunc("POST /v1/databases/{id}/eval", v.databaseEvalV1)
+	mux.HandleFunc("POST /v1/databases/{id}/report", v.databaseReportV1)
+	mux.HandleFunc("GET /v1/databases/{id}/adoption", v.databaseAdoptionV1)
 	mux.HandleFunc("GET /v1/tables", v.tablesV1)
 	mux.HandleFunc("POST /v1/sql", v.sqlV1)
 	mux.HandleFunc("POST /v1/branch", v.branchCreateV1)
@@ -977,6 +981,91 @@ func (v *V1) databaseEvalV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"database": id, "path": path, "results": results})
+}
+
+// databaseReportV1 builds the delivery report: what was modelled, and what
+// proves it.
+//
+// The verdict is the whole point and it is deliberately hard to earn.
+// Reconciliation is the load-bearing half — without it the report says so
+// rather than printing a shape and letting it read as verification. A document
+// that lists twenty metrics and no evidence is not a lighter version of a
+// delivery report; it is the thing a delivery report exists to prevent.
+func (v *V1) databaseReportV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		id = v.DBs.Default()
+	}
+	def, ok := v.DBs.Def(id)
+	if !ok {
+		writeErr(w, 404, errString(fmt.Sprintf("unknown database %q", id)))
+		return
+	}
+	if def.Model == "" {
+		writeErr(w, 409, errString("this database has no semantic model — there is nothing to report yet"))
+		return
+	}
+	eng, _, err := v.DBs.Resolve(r.Context(), id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+
+	d := &nleval.Delivery{Database: id, Model: def.Model}
+	d.Describe(eng.Model)
+	for _, is := range semantic.Lint(eng.Model) {
+		d.Notes = append(d.Notes, is.String())
+	}
+
+	// 对账拿得到就带上,拿不到就空着。**空着会让 Verdict 说不出 VERIFIED**,
+	// 那正是想要的:没有对照就没有证据,而一份列了二十个指标、没有证据的文档
+	// 不是交付报告的轻量版,它正是交付报告要防的东西。
+	if set, err := nleval.LoadReconSet(nleval.ReconPathFor(def.Model)); err == nil {
+		if rep, err := nleval.Reconcile(r.Context(), eng, set); err == nil {
+			d.Recon = rep
+			d.Uncovered = rep.Uncovered(eng.Model)
+		}
+	}
+
+	var md strings.Builder
+	d.WriteMarkdown(&md)
+	writeJSON(w, 200, map[string]any{
+		"database": id, "verdict": d.Verdict(), "markdown": md.String(), "report": d,
+	})
+}
+
+// databaseAdoptionV1 answers the question a delivery report cannot: does anyone
+// open it.
+//
+// A correct dashboard nobody looks at is worth nothing, and the audit trail has
+// held the answer all along — who asked what, and which metrics nobody has ever
+// asked for. Unused metrics are the finding: they are either modelled wrong or
+// were never wanted, and both are worth knowing before the next engagement
+// repeats them.
+func (v *V1) databaseAdoptionV1(w http.ResponseWriter, r *http.Request) {
+	if _, ok, err := v.principalFrom(r); !ok {
+		writeErr(w, 401, err)
+		return
+	}
+	eng, _, ok := v.resolveGoverned(w, r)
+	if !ok {
+		return
+	}
+	id := orDefault(engine.DatabaseFromRequest(r), v.DBs.Default())
+	days := 30
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 {
+		days = d
+	}
+	ad, err := handover.Measure(r.Context(), eng, id, v.Engagement, days)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, ad)
 }
 
 // changedOutside reports every named part of the model that differs between two
