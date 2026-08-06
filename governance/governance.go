@@ -319,6 +319,16 @@ func AuditRawSQL(ctx context.Context, eng *engine.Engine, p Principal, database,
 		fmt.Sprintf("raw sql on %s · %d row(s)", database, rows))
 }
 
+// AuditRawSQLRefused records a direct read the gate turned down.
+//
+// The refused ones matter more than the ones that worked: a statement stopped
+// by the read-only gate is somebody trying to write through the channel that
+// exists only for reading. Recording only successes left that invisible.
+func AuditRawSQLRefused(ctx context.Context, eng *engine.Engine, p Principal, database, sql string, cause error) {
+	writeAudit(ctx, eng, p, "", "", sql, true,
+		fmt.Sprintf("raw sql on %s refused: %v", database, cause))
+}
+
 // auditDDL is per-engine because the types and the default-now spelling are.
 // "user" and "sql" are reserved words in more than one engine, hence the
 // quoting everywhere.

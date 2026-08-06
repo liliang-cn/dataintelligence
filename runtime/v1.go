@@ -415,6 +415,12 @@ func (v *V1) sqlV1(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := eng.WH.QueryReadOnly(r.Context(), body.SQL)
 	if err != nil {
+		// Record the refusal, then report it. Returning early here left the
+		// one channel with no semantic layer vouching for it recording only
+		// what succeeded — so a `DELETE FROM sales` stopped by the read-only
+		// gate left no trace at all, and that attempt is exactly the row
+		// somebody goes looking for afterwards.
+		governance.AuditRawSQLRefused(r.Context(), eng, p, orDefault(id, v.DBs.Default()), body.SQL, err)
 		writeErr(w, 400, err)
 		return
 	}
