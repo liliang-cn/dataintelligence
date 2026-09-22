@@ -19,7 +19,7 @@ dimensions:
   - {name: dept_name,     entity: department, column: name,     type: categorical, synonyms: [部门, 品类部门]}
   - {name: category,      entity: product,    column: category, type: categorical, synonyms: [品类, 类别]}
   - {name: member_tier,   entity: member,     column: tier,     type: categorical, synonyms: [会员等级, 等级]}
-  - {name: member_phone,  entity: member,     column: phone,    type: categorical, mask: "'***'"}  # PII
+  - {name: member_phone,  entity: member,     column: phone,    type: categorical, mask: "'***'", roles: [admin]}  # PII
   - {name: sold_time,     entity: sale,       column: sold_at,  type: time}
 
 metrics:

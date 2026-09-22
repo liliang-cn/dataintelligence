@@ -71,7 +71,7 @@ func TestReportNamesWhatIsUnverifiedBeforeWhatPassed(t *testing.T) {
 
 func TestDescribeReadsGovernanceOffTheModel(t *testing.T) {
 	m := &semantic.Model{
-		Entities:   []semantic.Entity{{Name: "order", Table: "orders", PrimaryKey: "id"}},
+		Entities:   []semantic.Entity{{Name: "order", Table: "orders", PrimaryKey: semantic.StringList{"id"}}},
 		Dimensions: []semantic.Dimension{{Name: "email", Entity: "order", Column: "email", Mask: "hash"}},
 		Metrics: []semantic.Metric{
 			{Name: "revenue", Description: "d", Entity: "order", Agg: "sum", Expr: "amount", Roles: []string{"finance"}},

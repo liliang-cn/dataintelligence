@@ -52,14 +52,14 @@ func HeuristicModel(schema *Schema) (*semantic.Model, error) {
 		if pk == "" {
 			continue // can't model a table with no identifiable key
 		}
-		m.Entities = append(m.Entities, semantic.Entity{Name: ent, Table: t.Name, PrimaryKey: pk})
+		m.Entities = append(m.Entities, semantic.Entity{Name: ent, Table: t.Name, PrimaryKey: semantic.StringList{pk}})
 
 		key := map[string]bool{pk: true}
 		for _, fk := range t.ForeignKeys {
 			key[fk.Column] = true
 			if refEnt, ok := tableEntity[fk.RefTable]; ok {
 				m.Joins = append(m.Joins, semantic.Join{
-					From: ent, To: refEnt, FromKey: fk.Column, ToKey: fk.RefColumn, Cardinality: "many_to_one",
+					From: ent, To: refEnt, FromKey: semantic.StringList{fk.Column}, ToKey: semantic.StringList{fk.RefColumn}, Cardinality: "many_to_one",
 				})
 			}
 		}

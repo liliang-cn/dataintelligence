@@ -15,8 +15,8 @@ func groundTestModel(t *testing.T) *semantic.Model {
 	t.Helper()
 	m := &semantic.Model{
 		Entities: []semantic.Entity{
-			{Name: "store", Table: "stores", PrimaryKey: "store_id"},
-			{Name: "sale", Table: "sales", PrimaryKey: "sale_id"},
+			{Name: "store", Table: "stores", PrimaryKey: semantic.StringList{"store_id"}},
+			{Name: "sale", Table: "sales", PrimaryKey: semantic.StringList{"sale_id"}},
 		},
 		Dimensions: []semantic.Dimension{
 			{Name: "store_region", Entity: "store", Column: "region", Type: "categorical"},

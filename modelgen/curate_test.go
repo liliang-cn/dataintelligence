@@ -126,6 +126,13 @@ func TestCurateFillsBlanksAndNeverWidensWhatSomeoneNarrowed(t *testing.T) {
 	if m.Dimensions[0].Mask != maskExpr {
 		t.Errorf("phone 没被脱敏: %q", m.Dimensions[0].Mask)
 	}
+	// 脱敏必须带角色。没有角色的 mask 是"谁都看不见"，连该看的人也看不见 ——
+	// 编译器现在直接拒收这种模型，而在它开始拒收之前，本仓每一个模型都是这样写的。
+	for _, d := range m.Dimensions {
+		if d.Mask != "" && len(d.Roles) == 0 {
+			t.Errorf("维度 %q 有 mask 却没有 roles：这会对所有人脱敏", d.Name)
+		}
+	}
 	if !has(m.Dimensions[1].Synonyms, "区域") {
 		t.Errorf("store_region 没拿到中文同义词: %v", m.Dimensions[1].Synonyms)
 	}

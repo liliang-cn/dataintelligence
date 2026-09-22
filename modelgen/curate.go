@@ -263,6 +263,20 @@ func curate(m *semantic.Model) {
 		if d.Mask == "" && piiColumn(d.Column) {
 			d.Mask = maskExpr
 		}
+		// A mask with no roles is a column nobody can ever see, including the
+		// support agent whose job is to phone the customer back. The compiler
+		// refuses such a model outright, and that is the right refusal: masking
+		// narrows who sees a value, it does not delete it.
+		//
+		// This runs on any masked dimension, not only the ones masked above: a
+		// reviewer who writes `mask:` by hand leaves the same blank, and an
+		// empty Roles beside a non-empty Mask is exactly the kind of blank this
+		// function exists to fill. The gate is narrower than the money gate
+		// below — a leaked phone number costs more than an inconvenienced
+		// analyst, and whoever needs it wider widens it in one line.
+		if d.Mask != "" && len(d.Roles) == 0 {
+			d.Roles = []string{"admin"}
+		}
 	}
 	for i := range m.Metrics {
 		mt := &m.Metrics[i]

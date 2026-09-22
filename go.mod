@@ -6,9 +6,9 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/liliang-cn/agentcli v0.1.4
-	github.com/liliang-cn/cortexdb/v2 v2.63.2
+	github.com/liliang-cn/cortexdb/v2 v2.111.1
 	github.com/liliang-cn/eval-go v0.4.0
-	github.com/liliang-cn/semantic-go v0.1.7
+	github.com/liliang-cn/semantic-go v0.2.0
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/minio/minio-go/v7 v7.2.0

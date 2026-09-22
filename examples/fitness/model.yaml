@@ -30,7 +30,7 @@ dimensions:
   - {name: class_intensity,  entity: class_type, column: intensity,    type: categorical}
   - {name: instructor_name,  entity: instructor, column: name,         type: categorical}
   - {name: member_tier,      entity: member,     column: tier,         type: categorical}
-  - {name: member_email,     entity: member,     column: email,        type: categorical, mask: "'***'"}
+  - {name: member_email,     entity: member,     column: email,        type: categorical, mask: "'***'", roles: [admin]}
   - {name: booking_status,   entity: booking,    column: status,       type: categorical}
   - {name: session_time,     entity: session,    column: scheduled_at, type: time}
 
