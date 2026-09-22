@@ -55,6 +55,9 @@ func (b *Board) Markdown(modelHash, signedBy, signedAt, note string) (string, er
 	return s.String(), nil
 }
 
+// Refused is how many panels carry a refusal instead of numbers.
+func (b *Board) Refused() int { return b.refused() }
+
 func (b *Board) refused() int {
 	n := 0
 	for _, p := range b.Panels {

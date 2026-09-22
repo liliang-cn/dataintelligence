@@ -1,0 +1,91 @@
+{{define "board"}}<!doctype html>
+<html lang="zh" class="{{if .Dark}}dark{{end}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} · di board</title>
+<script src="/ui/static/tailwind.js"></script>
+<style>
+  /* The plugin ships its own CSS as a string; it is injected by the module
+     below rather than duplicated here, so an upgrade of the package cannot
+     leave this file describing the previous version's markup. */
+  body{font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .prose-narrow{max-width:min(1400px,100%)}
+</style>
+</head>
+<body class="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+<div class="mx-auto prose-narrow px-5 py-6">
+
+  <header class="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-zinc-200 dark:border-zinc-800 pb-3 mb-5">
+    <h1 class="text-lg font-semibold">{{.Title}}</h1>
+    <span class="text-xs text-zinc-500 font-mono">{{.Database}}</span>
+    <span class="text-xs text-zinc-500">role <b>{{.Role}}</b></span>
+    <span class="ml-auto text-xs font-mono text-zinc-500">model {{.ModelHash}}</span>
+  </header>
+
+  {{if .SignedBy}}
+    <p class="mb-5 text-sm rounded border border-emerald-300/60 dark:border-emerald-700/50 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-2">
+      口径经 <b>{{.SignedBy}}</b> 于 {{.SignedAt}} 批准{{if .SignNote}}（{{.SignNote}}）{{end}}。
+    </p>
+  {{else}}
+    <p class="mb-5 text-sm rounded border border-amber-300/70 dark:border-amber-700/50 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
+      <b>这张板上的口径没有人批准过。</b>它建自 model <code class="font-mono">{{.ModelHash}}</code>，从未经注册表上线。
+    </p>
+  {{end}}
+
+  {{if .Refused}}
+    <p class="mb-5 text-sm text-zinc-600 dark:text-zinc-400">
+      {{.Refused}} 个面板显示的是拒绝而不是数字 —— <b>{{.Role}}</b> 这个角色读不了它们要的东西。
+      一个角色的限制不会让整张板变白。
+    </p>
+  {{end}}
+
+  <main id="board" aria-busy="true"></main>
+  <noscript><p class="text-sm text-red-600">这张看板需要 JavaScript 渲染图表。原始围栏在 <a class="underline" href="{{.FenceURL}}">{{.FenceURL}}</a>。</p></noscript>
+
+  <footer class="mt-8 pt-3 border-t border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500">
+    每个面板都带着产生它的 SQL（点开「来源」）。数字由 di 自己执行，不经过模型。
+    · <a class="underline" href="/ui/board.md?role={{.Role}}">看原始围栏（带出处的 markdown）</a>
+  </footer>
+</div>
+
+<script type="module">
+  // The fence arrives as text rather than as JSON handed to a script: the
+  // renderer's job is to parse it, and a page that pre-parsed it would be a
+  // second implementation of the contract that could drift from the plugin's.
+  import { createRenderer } from "/ui/static/aigui-vanilla.js"
+  import { dashboard, dashboardCss } from "/ui/static/aigui-dashboard.js"
+
+  // The package ships its CSS as an array of rules in source and as one joined
+  // string in the published bundle. Taking either means an upgrade that flips
+  // the shape does not leave the board unstyled — which is how it fails: the
+  // panels render, the grid does not, and it reads as a layout bug.
+  const style = document.createElement("style")
+  style.textContent = Array.isArray(dashboardCss) ? dashboardCss.join("\n") : String(dashboardCss)
+  document.head.appendChild(style)
+
+  const host = document.getElementById("board")
+  try {
+    const res = await fetch({{.FenceURL}}, { headers: { accept: "text/markdown" } })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    const markdown = await res.text()
+    const renderer = createRenderer(host, {
+      plugins: [dashboard({ locale: "zh-CN", chartHeight: 240 })],
+      theme: {{if .Dark}}"dark"{{else}}"light"{{end}},
+      locale: "zh-CN",
+    })
+    renderer.setText(markdown)
+  } catch (err) {
+    // A board that fails silently is worse than one that says why: the reader
+    // would take an empty page for "no data" rather than "the fetch failed".
+    host.innerHTML = ""
+    const p = document.createElement("p")
+    p.className = "text-sm text-red-600"
+    p.textContent = "看板没能加载：" + (err && err.message ? err.message : String(err))
+    host.appendChild(p)
+  } finally {
+    host.setAttribute("aria-busy", "false")
+  }
+</script>
+</body>
+</html>{{end}}

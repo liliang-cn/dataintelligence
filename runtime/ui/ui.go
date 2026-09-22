@@ -57,6 +57,8 @@ func (u *UI) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui", u.playground)
 	mux.HandleFunc("GET /ui/", u.playground)
 	mux.HandleFunc("POST /ui/query", u.query)
+	mux.HandleFunc("GET /ui/board", u.boardPage)
+	mux.HandleFunc("GET /ui/board.md", u.boardFence)
 	mux.HandleFunc("GET /ui/model", u.model)
 	mux.HandleFunc("GET /ui/eval", u.eval)
 	mux.HandleFunc("GET /ui/runs", u.runs)

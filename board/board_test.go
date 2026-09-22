@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -224,5 +225,51 @@ func TestAnIntegerMeasureIsCharted(t *testing.T) {
 	series := ch.(map[string]any)["series"].([]any)[0].(map[string]any)
 	if got := series["data"].([]any); len(got) != 2 || got[0].(float64) != 2 {
 		t.Errorf("series data = %v", got)
+	}
+}
+
+// A line chart whose x-axis is out of order draws a zigzag that means nothing
+// — and looks like a trend. The months came back 04, 06, 03, 02, 07, 08, 05,
+// 01 and were drawn in that order.
+func TestATimeSeriesIsOrderedForwards(t *testing.T) {
+	rows := [][]any{{"2026-04", 4.0}, {"2026-01", 1.0}, {"2026-03", 3.0}, {"2026-02", 2.0}}
+	got := order(Panel{Grain: "month"}, rows)
+	for i, want := range []string{"2026-01", "2026-02", "2026-03", "2026-04"} {
+		if got[i][0] != want {
+			t.Fatalf("row %d = %v, want %s; full order %v", i, got[i][0], want, got)
+		}
+	}
+}
+
+// A broken-down panel answers "which is biggest", so it is sorted that way.
+func TestABreakdownLeadsWithTheBiggest(t *testing.T) {
+	rows := [][]any{{"home", 3.0}, {"kitchen", 9.0}, {"outdoor", 5.0}}
+	got := order(Panel{GroupBy: []string{"category"}}, rows)
+	if got[0][0] != "kitchen" || got[2][0] != "home" {
+		t.Errorf("order = %v, want kitchen first and home last", got)
+	}
+}
+
+// A timestamp on a month-grained axis must name the month, not a day, a clock
+// and the server's timezone.
+func TestAPeriodIsRenderedAtItsGrain(t *testing.T) {
+	ts := time.Date(2026, 4, 1, 8, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	for _, c := range []struct{ grain, want string }{
+		{"month", "2026-04"},
+		{"quarter", "2026-Q2"},
+		{"year", "2026"},
+		{"day", "2026-04-01"},
+		{"", "2026-04-01"},
+	} {
+		if got := period(ts, c.grain); got != c.want {
+			t.Errorf("period(%s) = %q, want %q", c.grain, got, c.want)
+		}
+	}
+	if got := periodCell(ts, "month"); got != "2026-04" {
+		t.Errorf("periodCell = %v", got)
+	}
+	// A driver that already returned text is left alone rather than reparsed.
+	if got := periodCell("2026-04", "month"); got != "2026-04" {
+		t.Errorf("a textual period was rewritten: %v", got)
 	}
 }

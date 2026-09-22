@@ -32,6 +32,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	semantic "github.com/liliang-cn/semantic-go"
 
@@ -133,7 +134,8 @@ func run(ctx context.Context, eng *engine.Engine, who governance.Principal,
 	out.SQL = ans.SQL
 	out.Source = source(p.Metrics, eng.ModelHash)
 	out.Columns = columnsFor(ans.Columns, p.GroupBy)
-	out.Rows, out.Note = rowsFor(ans.Rows)
+	out.Rows, out.Note = rowsFor(ans.Rows, p.Grain)
+	out.Rows = order(p, out.Rows)
 	out.Chart = chartFor(p, ans.Columns, out.Rows)
 	return out
 }
@@ -164,7 +166,7 @@ func columnsFor(cols []string, groupBy []string) []column {
 // rowsFor caps the rows and says so rather than silently showing a prefix. A
 // board that quietly drops the tail is one where somebody reads the top ten as
 // the whole population.
-func rowsFor(rows [][]any) ([][]any, string) {
+func rowsFor(rows [][]any, grain string) ([][]any, string) {
 	note := ""
 	if len(rows) > maxRows {
 		note = fmt.Sprintf("showing the first %d of %d rows", maxRows, len(rows))
@@ -176,6 +178,12 @@ func rowsFor(rows [][]any) ([][]any, string) {
 		for i, v := range r {
 			if i >= maxColumns {
 				break
+			}
+			// The first column of a grained panel is the period, and it is
+			// the only place a timestamp should be rendered as a bucket.
+			if i == 0 && grain != "" {
+				cells = append(cells, periodCell(v, grain))
+				continue
 			}
 			cells = append(cells, cell(v))
 		}
@@ -191,6 +199,17 @@ func rowsFor(rows [][]any) ([][]any, string) {
 // reaches the fence as a twenty-digit string is both ugly and, on the chart
 // side, not a number at all. So numbers become numbers and everything else
 // becomes a clipped string.
+// periodCell renders the bucket label of a grained panel.
+func periodCell(v any, grain string) any {
+	if t, ok := v.(time.Time); ok {
+		return period(t, grain)
+	}
+	// Some drivers hand a period back as text already. Parsing and
+	// reformatting it would be a second guess at a format the warehouse
+	// already chose, so a string is taken as it is.
+	return cell(v)
+}
+
 func cell(v any) any {
 	switch t := v.(type) {
 	case nil:
