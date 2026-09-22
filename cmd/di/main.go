@@ -38,10 +38,10 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	agentpkg "github.com/liliang-cn/agent-go/v2/pkg/agent"
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
-	"github.com/liliang-cn/agent-go/v2/pkg/providers"
+	agentpkg "github.com/liliang-cn/agent-go/v3/pkg/agent"
+	"github.com/liliang-cn/agent-go/v3/pkg/domain"
+	"github.com/liliang-cn/agent-go/v3/pkg/llm"
+	"github.com/liliang-cn/agent-go/v3/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/spf13/cobra"
 
@@ -1439,9 +1439,11 @@ plausible range?). For multi-part questions, query step by step and chain result
 If a query is refused or a metric is missing, say so honestly — never fabricate a number.`
 
 	ctx := context.Background()
+	// Native tool-calling over the MCP tools, not code execution. In v2 that
+	// took WithPTC(false); v3's Builder has no PTC to switch off, so the call
+	// goes rather than being translated into something that does nothing.
 	svc, err := agentpkg.New("di-analyst").
 		WithLLM(llm).
-		WithPTC(false). // native tool-calling over the MCP tools (not code-execution)
 		WithSystemPrompt(sys).
 		WithMCP(agentpkg.WithMCPConfigPaths(cfgPath)).
 		Build()

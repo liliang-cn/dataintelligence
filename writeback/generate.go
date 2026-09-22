@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
+	"github.com/liliang-cn/agent-go/v3/pkg/llm"
 )
 
 // Generator turns a natural-language request into a typed Proposal, grounded on

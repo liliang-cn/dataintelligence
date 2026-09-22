@@ -5,8 +5,8 @@ import (
 	"math"
 	"os"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
+	"github.com/liliang-cn/agent-go/v3/pkg/domain"
+	"github.com/liliang-cn/agent-go/v3/pkg/llm"
 )
 
 // EmbedderFromEnv is embedderFromEnv for callers outside this package: the

@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	agentpkg "github.com/liliang-cn/agent-go/v2/pkg/agent"
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/providers"
+	agentpkg "github.com/liliang-cn/agent-go/v3/pkg/agent"
+	"github.com/liliang-cn/agent-go/v3/pkg/domain"
+	"github.com/liliang-cn/agent-go/v3/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
 
 	"github.com/liliang-cn/dataintelligence/agenttools"
@@ -52,8 +52,13 @@ func New(eng *engine.Engine, pol governance.Policy, checksPath string) (*Agent, 
 	if err != nil {
 		return nil, err
 	}
+	// v2 had WithPTC(false) here, to keep the agent off the
+	// plan-then-call sandbox. v3's Builder has no PTC at all — the flag
+	// survives only on the persisted agent model and the Manager path — so a
+	// Builder-constructed agent never runs it, and the call is dropped rather
+	// than translated. Same behaviour, one fewer thing to keep switched off.
 	svc, err := agentpkg.New("di-copilot").
-		WithLLM(llmp).WithPTC(false).WithSystemPrompt(systemPrompt).
+		WithLLM(llmp).WithSystemPrompt(systemPrompt).
 		WithTools(tools(eng, pol, checksPath)...).
 		Build()
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
+	"github.com/liliang-cn/agent-go/v3/pkg/domain"
 	semantic "github.com/liliang-cn/semantic-go"
 	"gopkg.in/yaml.v3"
 )

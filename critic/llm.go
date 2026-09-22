@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
+	"github.com/liliang-cn/agent-go/v3/pkg/llm"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 )

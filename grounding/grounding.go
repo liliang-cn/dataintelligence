@@ -17,8 +17,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
+	"github.com/liliang-cn/agent-go/v3/pkg/domain"
+	"github.com/liliang-cn/agent-go/v3/pkg/llm"
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 	semantic "github.com/liliang-cn/semantic-go"
