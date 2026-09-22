@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"time"
@@ -19,6 +20,21 @@ type Engine struct {
 	Model   *semantic.Model
 	WH      *warehouse.Warehouse
 	Dialect semantic.Dialect
+
+	// ModelHash identifies the exact file this engine's model was loaded from,
+	// so an answer can be traced back to a definition somebody signed.
+	//
+	// The trail records who asked what; the registry records who approved which
+	// definition of the numbers. Until an answer carried the hash of the model
+	// that produced it there was no way to connect the two, which meant the
+	// honest answer to "which definition of revenue was this figure computed
+	// with" was that nobody could tell. Empty for an unmodelled database, and
+	// for a model handed over in memory rather than loaded from a path.
+	//
+	// The spelling is the model registry's — see rollout.HashFile, and
+	// TestTheEngineAndTheRegistryHashAModelTheSameWay, which is what keeps the
+	// two from drifting apart.
+	ModelHash string
 }
 
 // New loads a semantic model from YAML and opens the warehouse. When
@@ -33,11 +49,16 @@ type Engine struct {
 // point checks it.
 func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 	var m *semantic.Model
+	var hash string
 	if modelPath != "" {
-		var err error
-		if m, err = semantic.LoadFile(modelPath); err != nil {
+		b, err := os.ReadFile(modelPath)
+		if err != nil {
 			return nil, err
 		}
+		if m, err = semantic.Load(b); err != nil {
+			return nil, fmt.Errorf("%s: %w", modelPath, err)
+		}
+		hash = fmt.Sprintf("%x", sha256.Sum256(b))[:12]
 	}
 	opts := warehouse.Options{
 		AppRole:      os.Getenv("DI_DB_APP_ROLE"),
@@ -47,7 +68,7 @@ func New(ctx context.Context, modelPath, dsn string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{Model: m, WH: wh, Dialect: wh.Dialect()}, nil
+	return &Engine{Model: m, WH: wh, Dialect: wh.Dialect(), ModelHash: hash}, nil
 }
 
 func (e *Engine) Close() error { return e.WH.Close() }

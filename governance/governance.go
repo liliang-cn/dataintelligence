@@ -336,23 +336,23 @@ var auditDDL = map[string]string{
 	"pgx": `CREATE TABLE IF NOT EXISTS _audit (
 		ts timestamptz DEFAULT now(), "user" text, role text,
 		metrics text, group_by text, sql text, refused bool, note text,
-		question text, engagement text)`,
+		question text, engagement text, model_hash text)`,
 	"mysql": "CREATE TABLE IF NOT EXISTS _audit (" +
 		"ts DATETIME DEFAULT CURRENT_TIMESTAMP, `user` VARCHAR(190), role VARCHAR(190)," +
 		"metrics TEXT, group_by TEXT, `sql` TEXT, refused BOOLEAN, note TEXT," +
-		"question TEXT, engagement TEXT)",
+		"question TEXT, engagement TEXT, model_hash VARCHAR(64))",
 	"sqlite": `CREATE TABLE IF NOT EXISTS _audit (
 		ts TEXT DEFAULT (datetime('now')), "user" TEXT, role TEXT,
 		metrics TEXT, group_by TEXT, "sql" TEXT, refused INTEGER, note TEXT,
-		question TEXT, engagement TEXT)`,
+		question TEXT, engagement TEXT, model_hash TEXT)`,
 	"sqlserver": `IF OBJECT_ID('_audit','U') IS NULL CREATE TABLE _audit (
 		ts DATETIME2 DEFAULT SYSUTCDATETIME(), [user] NVARCHAR(190), role NVARCHAR(190),
 		metrics NVARCHAR(MAX), group_by NVARCHAR(MAX), [sql] NVARCHAR(MAX), refused BIT, note NVARCHAR(MAX),
-		question NVARCHAR(MAX), engagement NVARCHAR(MAX))`,
+		question NVARCHAR(MAX), engagement NVARCHAR(MAX), model_hash NVARCHAR(64))`,
 	"duckdb": `CREATE TABLE IF NOT EXISTS _audit (
 		ts TIMESTAMP DEFAULT now(), "user" VARCHAR, role VARCHAR,
 		metrics VARCHAR, group_by VARCHAR, "sql" VARCHAR, refused BOOLEAN, note VARCHAR,
-		question VARCHAR, engagement VARCHAR)`,
+		question VARCHAR, engagement VARCHAR, model_hash VARCHAR)`,
 }
 
 // writeAudit appends one row to the trail.
@@ -374,7 +374,7 @@ func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, g
 		return
 	}
 	ensureAuditColumns(ctx, eng)
-	cols := []string{"user", "role", "metrics", "group_by", "sql", "refused", "note", "question", "engagement"}
+	cols := []string{"user", "role", "metrics", "group_by", "sql", "refused", "note", "question", "engagement", "model_hash"}
 	quoted := make([]string, len(cols))
 	holders := make([]string, len(cols))
 	for i, c := range cols {
@@ -384,7 +384,7 @@ func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, g
 	stmt := fmt.Sprintf("INSERT INTO _audit (%s) VALUES (%s)",
 		strings.Join(quoted, ", "), strings.Join(holders, ", "))
 	if _, err := eng.WH.Exec(ctx, stmt, p.User, p.Role, metrics, groupBy, sql, refused, note,
-		p.Question, p.Engagement); err != nil {
+		p.Question, p.Engagement, eng.ModelHash); err != nil {
 		auditProblem(driver, err)
 	}
 }
@@ -397,7 +397,7 @@ func writeAudit(ctx context.Context, eng *engine.Engine, p Principal, metrics, g
 // about how to say "only if absent", so the only portable spelling is to try it
 // and read the error. A duplicate-column error here is the expected outcome on
 // every call after the first.
-var auditColumns = []string{"question", "engagement"}
+var auditColumns = []string{"question", "engagement", "model_hash"}
 
 var auditMigrated sync.Map
 

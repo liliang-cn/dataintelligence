@@ -9,12 +9,13 @@ package rollout
 
 import (
 	"context"
-	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os"
 	"sort"
+	"strings"
 
 	semantic "github.com/liliang-cn/semantic-go"
 
@@ -37,6 +38,15 @@ type Version struct {
 	Status    string `json:"status"`
 	CanaryPct int    `json:"canary_pct"`
 	At        string `json:"at"`
+
+	// SignedHash is the hash a person put their name to, SignedBy is that
+	// name, and SignedAt is when. An unsigned version is a candidate nobody
+	// has approved, and Promote refuses it. See sign.go for why the hash is
+	// recorded separately from Hash rather than trusted to stay equal to it.
+	SignedHash string `json:"signed_hash,omitempty"`
+	SignedBy   string `json:"signed_by,omitempty"`
+	SignedAt   string `json:"signed_at,omitempty"`
+	SignNote   string `json:"sign_note,omitempty"`
 }
 
 // Registry persists versions in the warehouse so rollouts survive restarts.
@@ -50,10 +60,36 @@ func New(wh *warehouse.Warehouse, nowStr func() string) *Registry {
 	return &Registry{wh: wh, nowStr: nowStr}
 }
 
+// registryDDL is per-engine, for the reason governance.auditDDL is: `jsonb`,
+// `timestamptz` and `DEFAULT now()` are Postgres spellings, and this table was
+// written in them. The trail table had the identical bug and its comment
+// records what it cost — on every engine but Postgres the writes failed and the
+// feature looked like it worked. This one failed louder, at CREATE TABLE, but
+// only because nothing had ever run it: the registry had no test that opened a
+// warehouse, so four of the five supported engines could not register a model
+// at all and nobody found out.
+//
+// The timestamp is written from Go rather than defaulted by the engine, which
+// removes the one remaining spelling difference and makes the column mean the
+// same thing everywhere: when the registry decided, not when the row landed.
+var registryDDL = map[string]string{
+	"pgx":       `CREATE TABLE IF NOT EXISTS _model_versions (name text PRIMARY KEY, doc text, updated_at text)`,
+	"sqlite":    `CREATE TABLE IF NOT EXISTS _model_versions (name TEXT PRIMARY KEY, doc TEXT, updated_at TEXT)`,
+	"duckdb":    `CREATE TABLE IF NOT EXISTS _model_versions (name VARCHAR PRIMARY KEY, doc VARCHAR, updated_at VARCHAR)`,
+	"mysql":     "CREATE TABLE IF NOT EXISTS _model_versions (name VARCHAR(190) PRIMARY KEY, doc LONGTEXT, updated_at VARCHAR(40))",
+	"sqlserver": `IF OBJECT_ID('_model_versions','U') IS NULL CREATE TABLE _model_versions (name NVARCHAR(190) PRIMARY KEY, doc NVARCHAR(MAX), updated_at NVARCHAR(40))`,
+}
+
 func (r *Registry) ensure(ctx context.Context) error {
-	_, err := r.wh.Exec(ctx, `CREATE TABLE IF NOT EXISTS _model_versions (
-		name text PRIMARY KEY, doc jsonb, updated_at timestamptz DEFAULT now())`)
-	return err
+	driver := r.wh.Driver()
+	ddl, ok := registryDDL[driver]
+	if !ok {
+		return fmt.Errorf("rollout: no registry schema for driver %q", driver)
+	}
+	if _, err := r.wh.Exec(ctx, ddl); err != nil {
+		return err
+	}
+	return r.ensureLedger(ctx)
 }
 
 // Register hashes a model file and stores it as a candidate.
@@ -69,7 +105,7 @@ func (r *Registry) Register(ctx context.Context, name, path string) (*Version, e
 	if _, err := semantic.Load(b); err != nil {
 		return nil, fmt.Errorf("invalid model: %w", err)
 	}
-	v := &Version{Name: name, Path: path, Hash: fmt.Sprintf("%x", sha256.Sum256(b))[:12], Status: StatusCandidate, At: r.nowStr()}
+	v := &Version{Name: name, Path: path, Hash: HashBytes(b), Status: StatusCandidate, At: r.nowStr()}
 	return v, r.save(ctx, v)
 }
 
@@ -109,8 +145,15 @@ func (r *Registry) Promote(ctx context.Context, name string) (changed []string, 
 	if err != nil {
 		return nil, err
 	}
+	// Nothing goes live that nobody approved, and nothing goes live that is not
+	// the thing they approved. See sign.go for why both halves are checked.
+	if err := r.requireSignature(cand); err != nil {
+		return nil, err
+	}
+	from := ""
 	prev, _ := r.Active(ctx) // may be nil on first promotion
 	if prev != nil {
+		from = prev.Hash
 		changed, err = ChangedMetrics(prev.Path, cand.Path)
 		if err != nil {
 			return nil, err
@@ -122,7 +165,15 @@ func (r *Registry) Promote(ctx context.Context, name string) (changed []string, 
 	}
 	cand.Status = StatusActive
 	cand.CanaryPct = 0
-	return changed, r.save(ctx, cand)
+	if err := r.save(ctx, cand); err != nil {
+		return nil, err
+	}
+	// The ledger line carries the signer, not whoever ran the promote: the
+	// judgement was made when the model was signed, and crediting the operator
+	// who typed the command with it would put a name on a decision they did not
+	// make.
+	return changed, r.record(ctx, "promote", cand.Name, cand.SignedBy,
+		from, cand.SignedHash, strings.Join(changed, " "), cand.SignNote)
 }
 
 // Rollback is the panic button: demote the current canary back to candidate,
@@ -147,10 +198,20 @@ func (r *Registry) Rollback(ctx context.Context) (*Version, error) {
 		return active, nil
 	}
 	// Otherwise promote the newest retired version back to active.
+	//
+	// This one does not ask for a signature. A rollback restores a model that
+	// was signed and promoted before, so the approval already exists; demanding
+	// a fresh one would put the panic button behind the slowest step in the
+	// process, at the moment it is most needed. It is still written down —
+	// going back is as much a change to what the numbers mean as going
+	// forward, and the ledger is where that is answered.
 	for _, v := range all {
 		if v.Status == StatusRetired {
 			v.Status = StatusActive
-			return v, r.save(ctx, v)
+			if err := r.save(ctx, v); err != nil {
+				return nil, err
+			}
+			return v, r.record(ctx, "rollback", v.Name, v.SignedBy, "", v.SignedHash, "", "restored by rollback")
 		}
 	}
 	return nil, nil
@@ -178,7 +239,9 @@ func bucket(key string) int {
 	return int(h.Sum32() % 100)
 }
 
-func (r *Registry) Active(ctx context.Context) (*Version, error) { return r.byStatus(ctx, StatusActive) }
+func (r *Registry) Active(ctx context.Context) (*Version, error) {
+	return r.byStatus(ctx, StatusActive)
+}
 
 // CanaryVersion returns the version currently serving canary traffic.
 func (r *Registry) CanaryVersion(ctx context.Context) (*Version, error) {
@@ -202,7 +265,7 @@ func (r *Registry) Get(ctx context.Context, name string) (*Version, error) {
 	if err := r.ensure(ctx); err != nil {
 		return nil, err
 	}
-	res, err := r.wh.Query(ctx, `SELECT doc FROM _model_versions WHERE name=$1`, name)
+	res, err := r.wh.Query(ctx, `SELECT doc FROM _model_versions WHERE name=`+r.ph(1), name)
 	if err != nil {
 		return nil, err
 	}
@@ -236,10 +299,31 @@ func (r *Registry) save(ctx context.Context, v *Version) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.wh.Exec(ctx, `INSERT INTO _model_versions (name, doc, updated_at) VALUES ($1,$2, now())
-		ON CONFLICT (name) DO UPDATE SET doc=$2, updated_at=now()`, v.Name, string(doc))
-	return err
+	// UPDATE-then-INSERT inside one transaction, rather than ON CONFLICT: the
+	// five engines spell the upsert four different ways (ON CONFLICT, ON
+	// DUPLICATE KEY UPDATE, MERGE), and this shape is the same sentence
+	// everywhere. The transaction is what makes it an upsert rather than two
+	// statements with a hole between them.
+	now := r.nowStr()
+	return r.wh.Apply(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE _model_versions SET doc=`+r.ph(1)+`, updated_at=`+r.ph(2)+` WHERE name=`+r.ph(3),
+			string(doc), now, v.Name)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			return nil
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO _model_versions (name, doc, updated_at) VALUES (`+r.ph(1)+`,`+r.ph(2)+`,`+r.ph(3)+`)`,
+			v.Name, string(doc), now)
+		return err
+	})
 }
+
+// ph is the engine's placeholder for the i-th argument, one-based.
+func (r *Registry) ph(i int) string { return r.wh.Dialect().Placeholder(i) }
 
 func decode(val any) (*Version, error) {
 	var b []byte
