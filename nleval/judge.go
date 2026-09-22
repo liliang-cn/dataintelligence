@@ -1,3 +1,5 @@
+//go:build engineer
+
 package nleval
 
 import (

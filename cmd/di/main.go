@@ -38,10 +38,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	agentpkg "github.com/liliang-cn/agent-go/v2/pkg/agent"
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
-	"github.com/liliang-cn/agent-go/v2/pkg/providers"
 	semantic "github.com/liliang-cn/semantic-go"
 	"github.com/spf13/cobra"
 
@@ -50,7 +46,6 @@ import (
 	"github.com/liliang-cn/dataintelligence/config"
 	"github.com/liliang-cn/dataintelligence/connectors"
 	"github.com/liliang-cn/dataintelligence/convo"
-	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/critic"
 	"github.com/liliang-cn/dataintelligence/destinations"
 	"github.com/liliang-cn/dataintelligence/engagement"
@@ -60,6 +55,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/grounding"
 	"github.com/liliang-cn/dataintelligence/handover"
 	"github.com/liliang-cn/dataintelligence/ingest"
+	"github.com/liliang-cn/dataintelligence/llm"
 	mcpserver "github.com/liliang-cn/dataintelligence/mcp"
 	"github.com/liliang-cn/dataintelligence/modelgen"
 	"github.com/liliang-cn/dataintelligence/nleval"
@@ -126,8 +122,6 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		// AI
-		leaf("copilot", "ai", "Autonomous agent: audits + answers + recommends (agent-go)", runCopilot),
-		leaf("agent", "ai", "Run an LLM agent over the MCP tools", runAgent),
 		// query & explore
 		leaf("query", "query", "Run a governed semantic query", runQuery),
 		leaf("ask", "query", "Ask a question in natural language", runAsk),
@@ -593,44 +587,6 @@ func runModelGen(argv []string) {
 	fmt.Fprintf(os.Stderr, "-- mode: %s · %d entities, %d joins, %d dimensions, %d metrics · %d lint note(s)\n",
 		mode, len(model.Entities), len(model.Joins), len(model.Dimensions), len(model.Metrics), len(issues))
 	fmt.Fprintln(os.Stderr, "-- review the draft, then run: di model lint -model <file>  and  di eval")
-}
-
-// runCopilot is a real agent-go agent driving the whole platform: given a goal,
-// the LLM autonomously calls governed platform tools (describe the warehouse,
-// list metrics, check dimensions, run a governed query, health-check for
-// cross-source conflicts) and synthesizes an answer + a recommended governed fix.
-// The agent decides WHAT to call; the deterministic tools guarantee each result.
-func runCopilot(argv []string) {
-	fs := flag.NewFlagSet("copilot", flag.ExitOnError)
-	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
-	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
-	goal := fs.String("goal", "Describe this warehouse, run a health check for cross-source conflicts, answer: which store region has the highest net revenue, then recommend the single highest-priority governed fix.", "the agent's goal")
-	checks := fs.String("checks", "examples/meridian/conflicts.yaml", "conflict checks YAML")
-	_ = fs.Parse(argv)
-
-	if !copilot.Available() {
-		fail(fmt.Errorf("copilot is the AI showcase — set LLM_BASE_URL/LLM_API_KEY/LLM_MODEL first"))
-	}
-	ctx := context.Background()
-	eng, err := engine.New(ctx, *model, *dsn)
-	if err != nil {
-		fail(err)
-	}
-	defer eng.Close()
-
-	agent, err := copilot.New(eng, governance.DefaultPolicy(), *checks)
-	if err != nil {
-		fail(err)
-	}
-	defer agent.Close()
-
-	fmt.Fprintf(os.Stderr, "-- copilot goal: %s\n\n", *goal)
-	res, err := agent.Run(ctx, *goal)
-	if err != nil {
-		fail(err)
-	}
-	fmt.Printf("%s\n", res.Answer)
-	fmt.Fprintf(os.Stderr, "\n-- agent: steps=%d tool_calls=%d tools=%v\n", res.Steps, res.ToolCalls, res.Tools)
 }
 
 // runReconcile detects cross-source data conflicts (deterministic SQL checks)
@@ -1279,7 +1235,7 @@ func parseFloors(s string) map[string]float64 {
 }
 
 // runDashboard renders a multi-panel dashboard. Panels are preset here; the
-// NL→dashboard hook (agent-go LLM → panel specs) plugs in at panelsFor().
+// NL→dashboard hook (LLM → panel specs) plugs in at panelsFor().
 func runDashboard(argv []string) {
 	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
 	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
@@ -1312,77 +1268,6 @@ func runDashboard(argv []string) {
 		}
 		printAnswer(ans)
 	}
-}
-
-// runAgent runs a multi-step analyst using agent-go's loop (plan → call tools →
-// reason → answer) over our governed MCP server. agent-go owns the loop; the MCP
-// tools own correctness + governance. The "critique" discipline is in the prompt.
-func runAgent(argv []string) {
-	fs := flag.NewFlagSet("agent", flag.ExitOnError)
-	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
-	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
-	role := fs.String("role", "analyst", "role the MCP server runs queries as")
-	_ = fs.Parse(argv)
-	question := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if question == "" {
-		fmt.Fprintln(os.Stderr, `di agent: provide a question, e.g. di agent "which region has the highest revenue, and its AOV?"`)
-		os.Exit(2)
-	}
-	base, key, mdl := os.Getenv("LLM_BASE_URL"), os.Getenv("LLM_API_KEY"), os.Getenv("LLM_MODEL")
-	if base == "" || key == "" || mdl == "" {
-		fail(fmt.Errorf("agent loop needs an LLM: set LLM_BASE_URL / LLM_API_KEY / LLM_MODEL"))
-	}
-
-	// MCP server config: spawn THIS binary in `mcp` mode as a stdio tool server.
-	exe, err := os.Executable()
-	if err != nil {
-		fail(err)
-	}
-	absModel, _ := filepath.Abs(*model)
-	cfg := map[string]any{"mcpServers": map[string]any{
-		"dataintelligence": map[string]any{
-			"type": "stdio", "command": exe,
-			"args": []string{"mcp", "-model", absModel, "-dsn", *dsn, "-role", *role},
-		},
-	}}
-	dir, _ := os.MkdirTemp("", "di-agent-")
-	defer os.RemoveAll(dir)
-	cfgPath := filepath.Join(dir, "mcpServers.json")
-	b, _ := json.Marshal(cfg)
-	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
-		fail(err)
-	}
-
-	llm, err := providers.NewOpenAILLMProvider(&domain.OpenAIProviderConfig{BaseURL: base, APIKey: key, LLMModel: mdl})
-	if err != nil {
-		fail(err)
-	}
-
-	const sys = `You are a data analyst. Answer ONLY using the warehouse MCP tools
-(list_metrics, get_dimensions, query_metric). Never write SQL.
-Plan: discover metrics with list_metrics; check valid dimensions with get_dimensions
-BEFORE grouping; call query_metric; then sanity-check (right metric? right grain?
-plausible range?). For multi-part questions, query step by step and chain results.
-If a query is refused or a metric is missing, say so honestly — never fabricate a number.`
-
-	ctx := context.Background()
-	svc, err := agentpkg.New("di-analyst").
-		WithLLM(llm).
-		WithPTC(false). // native tool-calling over the MCP tools (not code-execution)
-		WithSystemPrompt(sys).
-		WithMCP(agentpkg.WithMCPConfigPaths(cfgPath)).
-		Build()
-	if err != nil {
-		fail(err)
-	}
-	defer svc.Close()
-
-	res, err := svc.Chat(ctx, question)
-	if err != nil {
-		fail(err)
-	}
-	fmt.Printf("%v\n", res.FinalResult)
-	fmt.Fprintf(os.Stderr, "\n-- agent: steps=%d tool_calls=%d tools=%v\n", res.StepsTotal, res.ToolCalls, res.ToolsUsed)
 }
 
 // runCDC watches a table for new rows (change-data-capture) and streams events.
@@ -3717,6 +3602,7 @@ func runAdoption(argv []string) {
 	}
 	var buf strings.Builder
 	a.WriteMarkdown(&buf)
+
 	if *out == "" {
 		fmt.Print(buf.String())
 	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {

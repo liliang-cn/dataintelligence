@@ -1,3 +1,5 @@
+//go:build engineer
+
 // Package aicli runs a coding-agent CLI — Claude Code, Codex, Gemini — as the
 // LLM behind an engineer's own commands.
 //

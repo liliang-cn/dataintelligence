@@ -1,9 +1,9 @@
 // Package grounding is the context-engineering core: it indexes
 // metric metadata in cortexdb, retrieves the top-K relevant metrics for a
 // question (so the LLM sees only those, not the whole catalog), then asks the
-// agent-go LLM to emit a semantic query — or a clarification when ambiguous.
+// LLM to emit a semantic query — or a clarification when ambiguous.
 //
-// Layering: retrieval = cortexdb · LLM = agent-go · model = semantic-go.
+// Layering: retrieval = cortexdb · LLM = 本仓的 llm 包 · model = semantic-go。
 package grounding
 
 import (
@@ -17,10 +17,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/liliang-cn/agent-go/v2/pkg/domain"
-	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
+	"github.com/liliang-cn/dataintelligence/llm"
 	semantic "github.com/liliang-cn/semantic-go"
 )
 
@@ -31,10 +30,10 @@ type Grounder struct {
 	llm   *llm.Service // nil → deterministic keyword fallback
 	topK  int
 
-	emb      domain.EmbedderProvider // nil → lexical-only retrieval
-	mvecs    map[string][]float64    // metric name → unit embedding (dense index)
-	bank     *ExemplarBank           // few-shot exemplar bank (nil → no exemplars)
-	reranker Reranker                // cross-encoder rerank stage (nil → none)
+	emb      llm.Embedder         // nil → lexical-only retrieval
+	mvecs    map[string][]float64 // metric name → unit embedding (dense index)
+	bank     *ExemplarBank        // few-shot exemplar bank (nil → no exemplars)
+	reranker Reranker             // cross-encoder rerank stage (nil → none)
 }
 
 // Clarify is returned instead of a query when the question is ambiguous.
@@ -50,7 +49,7 @@ type ScoredMetric struct {
 }
 
 // New opens a cortexdb index, indexes the model's metrics, and (if LLM_* env is
-// set) wires the agent-go LLM. dbPath is a sqlite file path for the index.
+// set) wires the LLM. dbPath is a sqlite file path for the index.
 func New(ctx context.Context, model *semantic.Model, dbPath string) (*Grounder, error) {
 	cfg := cortexdb.DefaultConfig(dbPath)
 	cfg.Dimensions = 1 // lexical (FTS/BM25) retrieval; no embedder needed
