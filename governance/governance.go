@@ -100,6 +100,20 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 		attribute.String("role", p.Role),
 		attribute.StringSlice("metrics", q.Metrics))
 	// 1) Metric RBAC — refuse before any SQL runs.
+	//
+	// The caller's role goes onto the query as well as into authorize below.
+	// The compiler gained its own role gate, reading semantic.Query.Roles, and
+	// nothing here filled that field — so every metric carrying `roles:` was
+	// refused for everybody, with a message naming the roles it wanted and an
+	// empty list of the ones the caller had. `di query -metrics net_revenue
+	// -role finance` is the shape that found it: the flag was set, the
+	// principal carried it, and the compiler never saw it.
+	//
+	// Two gates for one rule is not duplication worth removing. authorize
+	// refuses with a message naming the metric and writes the refusal to the
+	// trail; the compiler's gate also governs which metrics a caller can
+	// *discover*, and covers the formula operands authorize never sees.
+	q.Roles = rolesOf(p)
 	if err := authorize(eng.Model, q.Metrics, p.Role); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())
 		return nil, err
@@ -257,6 +271,20 @@ func toFloat(v any) float64 {
 		_, _ = fmt.Sscanf(fmt.Sprintf("%v", t), "%g", &f)
 		return f
 	}
+}
+
+// rolesOf is the caller's roles as the compiler wants them.
+//
+// A Principal carries one role, because that is what a token carries and what
+// the trail records. The compiler takes a list, since a model may gate a metric
+// to several. A caller with no role gets an empty list rather than a list
+// containing the empty string, which would match a model that gated something
+// to "".
+func rolesOf(p Principal) []string {
+	if strings.TrimSpace(p.Role) == "" {
+		return nil
+	}
+	return []string{p.Role}
 }
 
 func authorize(m *semantic.Model, metrics []string, role string) error {
