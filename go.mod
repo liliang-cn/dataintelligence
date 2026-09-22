@@ -103,7 +103,11 @@ require (
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/liliang-cn/agentexec v0.5.0 // indirect
+	github.com/liliang-cn/alchemy v0.7.7 // indirect
+	github.com/liliang-cn/alchemy/connectors v0.7.7 // indirect
+	github.com/liliang-cn/athanor v0.1.0 // indirect
 	github.com/liliang-cn/mcp-swagger-server v1.3.0 // indirect
 	github.com/liliang-cn/pipeit v0.1.0 // indirect
 	github.com/liliang-cn/skills-go v1.9.0 // indirect

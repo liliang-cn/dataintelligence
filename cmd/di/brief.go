@@ -261,3 +261,11 @@ func briefParts(eng *engine.Engine) (*corpus.Store, *rollout.Registry, func()) {
 	reg := rollout.New(eng.WH, func() string { return time.Now().UTC().Format(time.RFC3339) })
 	return store, reg, closer
 }
+
+// nowUTC is the clock every ledger write in this binary shares.
+func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// openWarehouse is warehouse.Open with this binary's defaults.
+func openWarehouse(ctx context.Context, dsn string) (*warehouse.Warehouse, error) {
+	return warehouse.Open(ctx, dsn, warehouse.Options{})
+}

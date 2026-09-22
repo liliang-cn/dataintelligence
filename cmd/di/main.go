@@ -133,6 +133,8 @@ func rootCmd() *cobra.Command {
 		leaf("ask", "query", "Ask a question in natural language", runAsk),
 		leaf("brief", "query", "One question, both halves: the figure, who approved its definition, and what was written about it", runBrief),
 		leaf("corpus", "query", "The document half: add what was written down, search it", runCorpus),
+		leaf("status", "ops", "What is wired at this customer and what is not", runStatus),
+		leaf("graph", "query", "The explainable half: project the signed model into a graph, then ask what a number rests on or what a column change would move", runGraph),
 		leaf("chat", "query", "Conversational BI with cross-turn memory", runChat),
 		leaf("chain", "query", "Multi-metric chained query", runChain),
 		leaf("explain", "query", "Compile a query to SQL for a dialect (no execution)", runExplain),

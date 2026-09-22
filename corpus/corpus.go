@@ -60,6 +60,8 @@ type Embedder = cortexdb.Embedder
 // Store is the document half of an answer.
 type Store struct {
 	db *cortexdb.DB
+	// borrowed marks a store whose brain belongs to somebody else.
+	borrowed bool
 }
 
 // Open opens (or creates) the corpus at path.
@@ -81,7 +83,23 @@ func Open(path string, emb cortexdb.Embedder) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+// Wrap makes a corpus over a brain somebody else opened.
+//
+// Open is the convenience for a caller that only wants documents. A caller
+// that also wants the model graph must not open the file twice — the graph and
+// the corpus are the same deployment's knowledge, and two handles to one
+// SQLite file is a way to find out about locking at the worst moment. Such a
+// caller opens the brain once and wraps it, and closing it stays their job:
+// Wrap does not take ownership, so Close on the result is a no-op.
+func Wrap(db *cortexdb.DB) *Store { return &Store{db: db, borrowed: true} }
+
+// Close releases the brain, unless it was borrowed through Wrap.
+func (s *Store) Close() error {
+	if s.borrowed {
+		return nil
+	}
+	return s.db.Close()
+}
 
 // Document is one thing somebody wrote down.
 type Document struct {
