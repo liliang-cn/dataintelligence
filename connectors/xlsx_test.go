@@ -77,7 +77,7 @@ func TestXLSXSource_DiscoverAndRead(t *testing.T) {
 func TestXLSXSource_HeaderRowOffset(t *testing.T) {
 	path := writeXLSX(t, "销售", [][]string{
 		{"2026年门店销售明细", "", ""}, // banner row
-		{"门店", "品类", "金额"},        // real header (row 2)
+		{"门店", "品类", "金额"},      // real header (row 2)
 		{"西单店", "厨电", "1200"},
 		{"中关村店", "手机", "3400"},
 	})

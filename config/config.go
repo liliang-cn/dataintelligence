@@ -26,9 +26,9 @@ type Config struct {
 	// questions at once.
 	Engagement string     `yaml:"engagement"`
 	Model      string     `yaml:"model"`      // semantic model YAML path (single-database form)
-	Sources   string     `yaml:"sources"`    // source manifest path (optional)
-	IndexPath string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
-	Databases []Database `yaml:"databases"`  // multi-database form; see Defs
+	Sources    string     `yaml:"sources"`    // source manifest path (optional)
+	IndexPath  string     `yaml:"index_path"` // grounding index sqlite path (optional; temp if empty)
+	Databases  []Database `yaml:"databases"`  // multi-database form; see Defs
 	// DatabasesFile enables runtime registration (POST /v1/databases) and is
 	// where those registrations are stored. Empty (the default) means the only
 	// databases are the ones declared here — an endpoint that opens a DSN the
