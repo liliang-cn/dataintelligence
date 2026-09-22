@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/liliang-cn/dataintelligence/llm"
+	"github.com/liliang-cn/agent-go/v2/pkg/domain"
 	semantic "github.com/liliang-cn/semantic-go"
 	"gopkg.in/yaml.v3"
 )
@@ -40,7 +40,7 @@ func (e Exemplar) signature() string {
 
 // ExemplarBank is a small, embedding-backed store of exemplars.
 type ExemplarBank struct {
-	emb  llm.Embedder
+	emb  domain.EmbedderProvider
 	path string // YAML file for durable promotion (optional)
 
 	mu    sync.RWMutex

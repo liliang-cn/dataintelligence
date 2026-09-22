@@ -6,6 +6,7 @@ package ui
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 
 	semantic "github.com/liliang-cn/semantic-go"
 
+	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/flow"
 	"github.com/liliang-cn/dataintelligence/governance"
@@ -28,16 +30,23 @@ type UI struct {
 	Eng *engine.Engine
 	Pol governance.Policy
 	Fe  *flow.Engine
+	cop *copilot.Agent // nil when LLM_* is not configured
 	tpl *template.Template
 }
 
 // New parses the embedded templates and, when LLM creds are present, wires the
+// agent-go copilot.
 func New(eng *engine.Engine, pol governance.Policy, fe *flow.Engine) (*UI, error) {
 	tpl, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	u := &UI{Eng: eng, Pol: pol, Fe: fe, tpl: tpl}
+	if copilot.Available() {
+		if a, aerr := copilot.New(eng, pol, "examples/meridian/conflicts.yaml"); aerr == nil {
+			u.cop = a
+		}
+	}
 	return u, nil
 }
 
@@ -53,6 +62,66 @@ func (u *UI) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/runs", u.runs)
 	mux.HandleFunc("POST /ui/runs/{id}/{action}", u.runAction)
 	mux.HandleFunc("GET /ui/traces", u.traces)
+	mux.HandleFunc("GET /ui/copilot", u.copilotPage)
+	mux.HandleFunc("POST /ui/copilot/ask", u.copilotAsk)
+	mux.HandleFunc("GET /ui/copilot/stream", u.copilotStream)
+}
+
+// copilotStream runs the agent and streams its tool calls live over SSE.
+func (u *UI) copilotStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	send := func(ev copilot.StreamEvent) {
+		b, _ := json.Marshal(ev)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+	if u.cop == nil {
+		send(copilot.StreamEvent{Kind: "complete", Text: "Copilot disabled — set LLM_* and restart."})
+		return
+	}
+	goal := r.URL.Query().Get("goal")
+	if goal == "" {
+		send(copilot.StreamEvent{Kind: "complete", Text: "ask something"})
+		return
+	}
+	if _, err := u.cop.Stream(r.Context(), goal, send); err != nil {
+		send(copilot.StreamEvent{Kind: "complete", Text: "error: " + err.Error()})
+	}
+}
+
+// --- Copilot (agent-go) ---
+
+func (u *UI) copilotPage(w http.ResponseWriter, _ *http.Request) {
+	u.render(w, "copilot.html", page("copilot", map[string]any{"Enabled": u.cop != nil}))
+}
+
+func (u *UI) copilotAsk(w http.ResponseWriter, r *http.Request) {
+	if u.cop == nil {
+		u.render(w, "copilot_result.html", map[string]any{"Error": "Copilot disabled — set LLM_BASE_URL/LLM_API_KEY/LLM_MODEL and restart."})
+		return
+	}
+	_ = r.ParseForm()
+	goal := r.FormValue("goal")
+	if goal == "" {
+		u.render(w, "copilot_result.html", map[string]any{"Error": "ask something"})
+		return
+	}
+	res, err := u.cop.Run(r.Context(), goal)
+	if err != nil {
+		u.render(w, "copilot_result.html", map[string]any{"Error": err.Error()})
+		return
+	}
+	u.render(w, "copilot_result.html", map[string]any{
+		"Answer": res.Answer, "Tools": res.Tools, "ToolCalls": res.ToolCalls,
+	})
 }
 
 // page wraps page data with the nav-active marker shared by the layout.

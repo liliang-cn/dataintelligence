@@ -1,5 +1,3 @@
-//go:build engineer
-
 package aicli
 
 import (

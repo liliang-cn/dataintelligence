@@ -5,19 +5,20 @@ import (
 	"math"
 	"os"
 
-	"github.com/liliang-cn/dataintelligence/llm"
+	"github.com/liliang-cn/agent-go/v2/pkg/domain"
+	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 )
 
 // EmbedderFromEnv is embedderFromEnv for callers outside this package: the
 // corpus needs the same endpoint the metric index uses, and two ways of
 // configuring one embedding service is one too many.
-func EmbedderFromEnv() (llm.Embedder, error) { return embedderFromEnv() }
+func EmbedderFromEnv() (domain.EmbedderProvider, error) { return embedderFromEnv() }
 
 // embedderFromEnv builds a dense embedder from DI_EMBED_BASE_URL / DI_EMBED_API_KEY
 // / DI_EMBED_MODEL (any OpenAI-compatible /embeddings endpoint, e.g. DashScope
 // text-embedding-v4). Returns (nil, nil) when unconfigured so the grounder
 // degrades cleanly to lexical-only retrieval.
-func embedderFromEnv() (llm.Embedder, error) {
+func embedderFromEnv() (domain.EmbedderProvider, error) {
 	base, key, model := os.Getenv("DI_EMBED_BASE_URL"), os.Getenv("DI_EMBED_API_KEY"), os.Getenv("DI_EMBED_MODEL")
 	if base == "" || key == "" || model == "" {
 		return nil, nil
@@ -54,7 +55,7 @@ func dot(a, b []float64) float64 {
 }
 
 // embedUnit embeds one text and returns its unit vector.
-func embedUnit(ctx context.Context, e llm.Embedder, text string) ([]float64, error) {
+func embedUnit(ctx context.Context, e domain.EmbedderProvider, text string) ([]float64, error) {
 	v, err := e.Embed(ctx, text)
 	if err != nil {
 		return nil, err

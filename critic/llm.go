@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liliang-cn/dataintelligence/llm"
+	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 
 	"github.com/liliang-cn/dataintelligence/engine"
 )
@@ -17,7 +17,7 @@ import (
 // inspects the question, the chosen metrics' definitions, and a sample of rows.
 type LLMCritic struct{ svc *llm.Service }
 
-// NewLLMCritic wires an LLM from LLM_* env. Returns (nil, err) when
+// NewLLMCritic wires an agent-go LLM from LLM_* env. Returns (nil, err) when
 // unconfigured so callers can fall back to the rule critic alone.
 func NewLLMCritic() (*LLMCritic, error) {
 	svc, err := llm.NewOpenAIFromEnv()

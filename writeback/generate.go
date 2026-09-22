@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liliang-cn/dataintelligence/llm"
+	"github.com/liliang-cn/agent-go/v2/pkg/llm"
 )
 
 // Generator turns a natural-language request into a typed Proposal, grounded on
@@ -18,7 +18,7 @@ type Generator struct {
 	schema *Schema
 }
 
-// NewGenerator wires the LLM from env. Returns (nil, err) when no creds.
+// NewGenerator wires the agent-go LLM from env. Returns (nil, err) when no creds.
 func NewGenerator(s *Schema) (*Generator, error) {
 	svc, err := llm.NewOpenAIFromEnv()
 	if err != nil {
