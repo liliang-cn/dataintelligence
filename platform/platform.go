@@ -38,6 +38,8 @@ package platform
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -110,8 +112,24 @@ func Open(ctx context.Context, cfg Config) (*Platform, error) {
 
 	if p.Engine != nil && p.Engine.Governed() {
 		path := cfg.IndexPath
-		if path == "" {
+		if path == "" && cfg.BrainPath != "" {
 			path = cfg.BrainPath + ".index"
+		}
+		if path == "" {
+			// Neither was given. The metric index is derived — it is rebuilt
+			// from the model on every open — so a temp file is the right home
+			// for it, and `cfg.BrainPath + ".index"` with an empty BrainPath
+			// is the wrong one: it resolves to `.index` in the working
+			// directory, which during a test is the source tree. A package
+			// that writes into its own directory is one whose test run shows
+			// up in `git status`.
+			d, err := os.MkdirTemp("", "di-index-")
+			if err != nil {
+				miss("grounding", err.Error())
+				return p, nil
+			}
+			path = filepath.Join(d, "idx.db")
+			p.closers = append(p.closers, func() { _ = os.RemoveAll(d) })
 		}
 		if g, err := grounding.New(ctx, p.Engine.Model, path); err != nil {
 			miss("grounding", err.Error())

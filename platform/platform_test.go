@@ -156,3 +156,25 @@ func TestNoBrainStillSignsAndComputes(t *testing.T) {
 		t.Error("brain-backed halves came back without a brain")
 	}
 }
+
+// A package that writes into its own directory is one whose test run shows up
+// in `git status`. It did: with no brain path, the index went to `.index`
+// relative to the working directory, which during a test is the source tree.
+func TestAnIndexWithNowhereToLiveDoesNotLandInTheSourceTree(t *testing.T) {
+	cfg := world(t)
+	cfg.BrainPath = ""
+	cfg.IndexPath = ""
+	before, _ := os.Getwd()
+
+	p, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if p.Grounder == nil {
+		t.Fatalf("grounding was dropped for want of a path: %v", p.Missing)
+	}
+	if _, err := os.Stat(filepath.Join(before, ".index")); err == nil {
+		t.Errorf("the index was written into %s", before)
+	}
+}
