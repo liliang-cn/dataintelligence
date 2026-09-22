@@ -8,6 +8,11 @@ import (
 	"github.com/liliang-cn/dataintelligence/llm"
 )
 
+// EmbedderFromEnv is embedderFromEnv for callers outside this package: the
+// corpus needs the same endpoint the metric index uses, and two ways of
+// configuring one embedding service is one too many.
+func EmbedderFromEnv() (llm.Embedder, error) { return embedderFromEnv() }
+
 // embedderFromEnv builds a dense embedder from DI_EMBED_BASE_URL / DI_EMBED_API_KEY
 // / DI_EMBED_MODEL (any OpenAI-compatible /embeddings endpoint, e.g. DashScope
 // text-embedding-v4). Returns (nil, nil) when unconfigured so the grounder

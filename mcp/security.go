@@ -9,7 +9,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 
+	"github.com/liliang-cn/dataintelligence/corpus"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/rollout"
 )
 
 // Principal is the resolved caller identity for an MCP request. It comes from the
@@ -37,6 +39,14 @@ type Options struct {
 	Burst      int
 	ChecksPath string              // conflict checks for the health_check tool (empty = disabled)
 	Grounder   *grounding.Grounder // NL→semantic-query engine for the ground tool (nil = disabled)
+
+	// Corpus and Registry are what the brief tool needs beyond a figure: the
+	// documents that explain a definition and the ledger that says who approved
+	// it. Either may be nil — a deployment with neither still serves brief, and
+	// what it returns then is a number with the honest admission that nothing
+	// stands behind it.
+	Corpus   *corpus.Store
+	Registry *rollout.Registry
 }
 
 func defaultOptions() *Options {

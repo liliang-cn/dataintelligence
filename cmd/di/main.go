@@ -125,6 +125,8 @@ func rootCmd() *cobra.Command {
 		// query & explore
 		leaf("query", "query", "Run a governed semantic query", runQuery),
 		leaf("ask", "query", "Ask a question in natural language", runAsk),
+		leaf("brief", "query", "One question, both halves: the figure, who approved its definition, and what was written about it", runBrief),
+		leaf("corpus", "query", "The document half: add what was written down, search it", runCorpus),
 		leaf("chat", "query", "Conversational BI with cross-turn memory", runChat),
 		leaf("chain", "query", "Multi-metric chained query", runChain),
 		leaf("explain", "query", "Compile a query to SQL for a dialect (no execution)", runExplain),
@@ -383,11 +385,14 @@ func buildMCPHTTPServer(addr string, dbs *engine.Databases, verifier auth.TokenV
 				"database %q has no semantic model — it is available for direct SQL only (POST /v1/sql)",
 				orDefaultStr(id, dbs.Default())))
 		}
+		store, reg, _ := briefParts(eng)
 		opts := &mcpserver.Options{
 			Default:    mcpserver.Principal{User: "local", Role: "analyst", Scopes: []string{"metrics:read", "data:write"}},
 			Burst:      5,
 			ChecksPath: checks,
 			Grounder:   gr,
+			Corpus:     store,
+			Registry:   reg,
 		}
 		return mcpserver.NewServer(eng, opts)
 	}, nil)
@@ -860,12 +865,15 @@ func boolStr(b bool, t, f string) string {
 //	di rollout register -name v2 -model models/candidate.yaml
 //	di rollout list
 //	di rollout canary  -name v2 -pct 10
-//	di rollout promote -name v2     # retires old active, prints lineage delta
+//	di rollout sign    -name v2 -by li -note "reviewed the revenue definition"
+//	di rollout promote -name v2     # refuses unless signed; prints lineage delta
+//	di rollout ledger               # who changed which numbers, and when
+//	di rollout attest               # which answers came from a signed definition
 //	di rollout rollback             # panic button
 //	di rollout simulate -pct 10 -n 1000
 func runRollout(argv []string) {
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: di rollout <register|list|canary|promote|rollback|simulate> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: di rollout <register|list|canary|sign|promote|rollback|ledger|attest|simulate> [flags]")
 		os.Exit(2)
 	}
 	sub, rest := argv[0], argv[1:]
@@ -876,6 +884,9 @@ func runRollout(argv []string) {
 	pct := fs.Int("pct", 0, "canary percentage 0..100")
 	n := fs.Int("n", 1000, "number of synthetic requests (simulate)")
 	minHealth := fs.Float64("min", 1.0, "canary health floor (watch): auto-rollback below this")
+	by := fs.String("by", "", "who is approving this model (sign)")
+	hash := fs.String("hash", "", "the hash you read, if you want it checked against the file (sign)")
+	note := fs.String("note", "", "why this change was approved (sign)")
 	_ = fs.Parse(rest)
 
 	ctx := context.Background()
@@ -914,6 +925,68 @@ func runRollout(argv []string) {
 			fail(err)
 		}
 		fmt.Printf("%s now canary @ %d%% of traffic\n", v.Name, v.CanaryPct)
+	case "sign":
+		if *name == "" || *by == "" {
+			fail(fmt.Errorf("sign needs -name and -by"))
+		}
+		v, err := reg.Sign(ctx, *name, *hash, *by, *note)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s signed by %s at %s (hash %s)\n", v.Name, v.SignedBy, v.SignedAt, v.SignedHash)
+	case "ledger":
+		entries, err := reg.Ledger(ctx)
+		if err != nil {
+			fail(err)
+		}
+		if len(entries) == 0 {
+			fmt.Println("-- no model changes recorded yet")
+			break
+		}
+		for _, e := range entries {
+			line := fmt.Sprintf("%-20s %-8s %-10s by %-12s %s", e.At, e.Act, e.Name, e.By, e.ToHash)
+			if e.Changed != "" {
+				line += "  changed: " + e.Changed
+			}
+			if e.Note != "" {
+				line += "  — " + e.Note
+			}
+			fmt.Println(line)
+		}
+	case "attest":
+		all, err := reg.Attest(ctx)
+		if err != nil {
+			fail(err)
+		}
+		if len(all) == 0 {
+			fmt.Println("-- no answers in the trail yet")
+			break
+		}
+		for _, a := range all {
+			who := a.SignedBy
+			if who == "" {
+				who = "NOBODY"
+			}
+			h := a.Hash
+			if h == "" {
+				h = "(no model recorded)"
+			}
+			line := fmt.Sprintf("%-22s %6d answers  signed by %s", h, a.Answers, who)
+			if !a.Promoted {
+				line += "  ** never promoted through the registry **"
+			}
+			if a.Note != "" {
+				line += "  — " + a.Note
+			}
+			fmt.Println(line)
+		}
+		if bad := rollout.Unattested(all); len(bad) > 0 {
+			n := 0
+			for _, b := range bad {
+				n += b.Answers
+			}
+			fmt.Printf("\n%d answer(s) came from %d model(s) nobody approved.\n", n, len(bad))
+		}
 	case "promote":
 		changed, err := reg.Promote(ctx, *name)
 		if err != nil {
@@ -1962,11 +2035,16 @@ func runMCP(argv []string) {
 		gr.WithExemplars(bank)
 	}
 
+	store, reg, closeBrief := briefParts(eng)
+	defer closeBrief()
+
 	opts := &mcpserver.Options{
 		Default: mcpserver.Principal{User: "local", Role: *role, Scopes: []string{"metrics:read", "data:write"}},
 		RPS:     *rps, Burst: 5,
 		ChecksPath: envOr("DI_CHECKS", "examples/meridian/conflicts.yaml"),
 		Grounder:   gr,
+		Corpus:     store,
+		Registry:   reg,
 	}
 
 	if *httpAddr != "" {
@@ -1989,7 +2067,7 @@ func runMCP(argv []string) {
 	}
 
 	srv := mcpserver.NewServer(eng, opts)
-	fmt.Fprintln(os.Stderr, "dataintelligence MCP server on stdio (tools: list_metrics, get_dimensions, query_metric, ground, ingest_csv, describe_warehouse, health_check)")
+	fmt.Fprintf(os.Stderr, "dataintelligence MCP server on stdio (tools: %s)\n", strings.Join(mcpserver.ToolNames, ", "))
 	if err := srv.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
 		fail(err)
 	}
@@ -3603,12 +3681,25 @@ func runAdoption(argv []string) {
 	var buf strings.Builder
 	a.WriteMarkdown(&buf)
 
+	// Adoption says how much was asked; provenance says how much of it anybody
+	// stands behind. Reported together because separately each one flatters the
+	// delivery: a busy trail reads as success until you ask whose definitions
+	// produced it.
+	prov, perr := handover.Attest(ctx, eng, name, name)
+	if perr == nil {
+		buf.WriteString("\n")
+		prov.WriteMarkdown(&buf)
+	}
+
 	if *out == "" {
 		fmt.Print(buf.String())
 	} else if err := os.WriteFile(*out, []byte(buf.String()), 0o644); err != nil {
 		fail(err)
 	}
 	fmt.Fprintf(os.Stderr, "-- %s\n", a.Summary())
+	if perr == nil {
+		fmt.Fprintf(os.Stderr, "-- %s\n", prov.Summary())
+	}
 }
 
 // runDelta rolls up what the product could not do, across every engagement.

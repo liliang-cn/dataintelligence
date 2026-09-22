@@ -48,6 +48,7 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "query_metric",
 		Description: "Run a governed semantic query: compute metrics, optionally grouped by dimensions. You name metrics/dimensions; the layer compiles safe SQL. Never write SQL yourself."},
 		s.queryMetric)
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "brief", Description: briefDescription}, s.brief)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "ground",
 		Description: "Resolve a natural-language question into a typed semantic query (metrics, group_by, filters, grain) WITHOUT executing it. Use to see how a question maps to the model, then pass the result to query_metric."},
 		s.ground)
@@ -61,6 +62,19 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 		Description: "Detect cross-source data conflicts (orphans, price drift, oversell)."},
 		s.healthCheck)
 	return server
+}
+
+// ToolNames is what NewServer registers.
+//
+// It exists because the stdio banner listed the tools as a hand-written string
+// and went stale the moment a tool was added: the server served `brief` while
+// telling its operator it did not have one. The SDK does not expose a server's
+// tools, so this list is still written by hand — but it is written once, in the
+// package that owns them, and TestTheAdvertisedToolsAreTheServedTools asks a
+// real client session what the server actually has and fails when they differ.
+var ToolNames = []string{
+	"list_metrics", "get_dimensions", "query_metric", "brief", "ground",
+	"ingest_csv", "describe_warehouse", "health_check",
 }
 
 // principal resolves the caller from the request's bearer token, else the default.
