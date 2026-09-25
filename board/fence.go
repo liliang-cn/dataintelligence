@@ -55,13 +55,30 @@ func (b *Board) Markdown(modelHash, signedBy, signedAt, note string) (string, er
 	return s.String(), nil
 }
 
-// Refused is how many panels carry a refusal instead of numbers.
+// Refused is how many panels governance declined for this reader — the
+// panels a different role would see numbers in.
+//
+// It used to count every panel with an error, and the page then said all of
+// them were the reader's role: on Meridian, "6 panels show a refusal — analyst
+// cannot read what they need", when one was a role and five were panels that
+// could not be computed for anybody.
 func (b *Board) Refused() int { return b.refused() }
 
 func (b *Board) refused() int {
 	n := 0
 	for _, p := range b.Panels {
-		if p.Error != "" {
+		if p.Error != "" && p.refused {
+			n++
+		}
+	}
+	return n
+}
+
+// Failed is how many panels could not be computed at all, whoever reads them.
+func (b *Board) Failed() int {
+	n := 0
+	for _, p := range b.Panels {
+		if p.Error != "" && !p.refused {
 			n++
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	semantic "github.com/liliang-cn/semantic-go"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/liliang-cn/dataintelligence/corpus"
@@ -240,5 +241,151 @@ func TestTheAdvertisedToolsAreTheServedTools(t *testing.T) {
 	}
 	for name := range served {
 		t.Errorf("the server serves %q but ToolNames does not advertise it", name)
+	}
+}
+
+// An agent proposes a layout; every number in the result is the host's.
+func TestTheBoardToolComputesTheNumbersTheAgentProposedTheLayoutFor(t *testing.T) {
+	s := briefServer(t)
+	res, out, err := s.board(context.Background(), nil, boardIn{
+		Title:  "Revenue",
+		Panels: []panelIn{{Title: "net revenue", Metrics: []string{"revenue"}}},
+	})
+	if err != nil {
+		t.Fatalf("board: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("error result: %s", resultText(res))
+	}
+	fence := resultText(res)
+	if !strings.HasPrefix(fence, "```dashboard") {
+		t.Fatalf("not an AIGUI fence:\n%s", fence)
+	}
+	// 2*10-1 + 3*20-2 + 1*50-5 = 122, computed here and not by any model.
+	if !strings.Contains(fence, "122") {
+		t.Errorf("the fence does not carry the computed figure:\n%s", fence)
+	}
+	// And the SQL that produced it, so the number can be checked.
+	if !strings.Contains(fence, "SUM(") {
+		t.Errorf("the fence does not carry the SQL that produced the number:\n%s", fence)
+	}
+	m := out.(map[string]any)
+	if m["panels"] != 1 || m["refused"] != 0 {
+		t.Errorf("payload = %+v, want one panel and no refusals", m)
+	}
+	if m["signed_by"] != "张三" {
+		t.Errorf("the board does not name whose definitions it used: %+v", m)
+	}
+}
+
+// A panel naming something the model does not have is refused by name, not
+// dropped: a board that quietly loses a panel answers a different question
+// from the one that was asked.
+func TestAPanelForAMetricThatDoesNotExistIsRefusedByName(t *testing.T) {
+	s := briefServer(t)
+	res, out, err := s.board(context.Background(), nil, boardIn{
+		Panels: []panelIn{
+			{Metrics: []string{"revenue"}},
+			{Metrics: []string{"profit_per_unicorn"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("one bad panel failed the whole board: %s", resultText(res))
+	}
+	fence := resultText(res)
+	if !strings.Contains(fence, "profit_per_unicorn") {
+		t.Errorf("the refused panel does not name what it asked for:\n%s", fence)
+	}
+	if !strings.Contains(fence, "122") {
+		t.Errorf("the good panel lost its number because another panel failed:\n%s", fence)
+	}
+	// A metric that does not exist is not a refusal: no role would see a
+	// number there. It counts as failed, so a reader is not told their role
+	// is the problem.
+	if m := out.(map[string]any); m["failed"] != 1 || m["refused"] != 0 {
+		t.Errorf("payload = %+v, want one failed panel and no refusals", m)
+	}
+}
+
+// With no panels the tool proposes one, which is what an agent told "show me a
+// dashboard" needs.
+func TestTheBoardToolProposesALayoutWhenGivenNone(t *testing.T) {
+	s := briefServer(t)
+	res, out, err := s.board(context.Background(), nil, boardIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("error result: %s", resultText(res))
+	}
+	if n, _ := out.(map[string]any)["panels"].(int); n == 0 {
+		t.Fatal("no panels were proposed")
+	}
+	if !strings.Contains(resultText(res), "revenue") {
+		t.Errorf("the proposal does not include the model's only metric:\n%s", resultText(res))
+	}
+}
+
+// A panel with no metric is a caller error, said plainly.
+func TestAPanelWithNoMetricIsRefusedWithAnExplanation(t *testing.T) {
+	s := briefServer(t)
+	res, _, err := s.board(context.Background(), nil, boardIn{Panels: []panelIn{{Title: "empty"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatal("a panel with no metric was accepted")
+	}
+	if !strings.Contains(resultText(res), "list_metrics") {
+		t.Errorf("the refusal does not say what to do: %s", resultText(res))
+	}
+}
+
+// The board runs as the caller, like every other governed tool.
+func TestTheBoardToolIsScopeGuarded(t *testing.T) {
+	s := briefServer(t)
+	s.opts.Default = Principal{User: "nobody", Role: "analyst"}
+	res, _, err := s.board(context.Background(), nil, boardIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(resultText(res), "metrics:read") {
+		t.Errorf("an unscoped caller got a board: %s", resultText(res))
+	}
+}
+
+// A panel the reader's role may not read is a refusal, and is counted as one.
+func TestAPanelTheRoleMayNotReadIsCountedAsARefusal(t *testing.T) {
+	s := briefServer(t)
+	s.opts.Default = Principal{User: "u", Role: "analyst", Scopes: []string{"metrics:read"}}
+	gated := `
+entities:
+  - {name: order_item, table: order_items, primary_key: id}
+dimensions: []
+metrics:
+  - {name: revenue, description: d, entity: order_item, agg: sum, expr: "qty*price - discount - refund", roles: [finance]}
+  - {name: units, description: d, entity: order_item, agg: sum, expr: "qty"}
+`
+	dir := t.TempDir()
+	mp := filepath.Join(dir, "g.yaml")
+	if err := os.WriteFile(mp, []byte(gated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := semantic.LoadFile(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.eng.Model = m
+	_, out, err := s.board(context.Background(), nil, boardIn{Panels: []panelIn{
+		{Metrics: []string{"revenue"}}, {Metrics: []string{"units"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := out.(map[string]any); p["refused"] != 1 || p["failed"] != 0 {
+		t.Errorf("payload = %+v, want one refusal and nothing failed", p)
 	}
 }

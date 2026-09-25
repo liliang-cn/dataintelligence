@@ -78,7 +78,12 @@ type panel struct {
 	SQL     string   `json:"sql,omitempty"`
 	Note    string   `json:"note,omitempty"`
 	Error   string   `json:"error,omitempty"`
-	Source  string   `json:"source,omitempty"`
+	// refused says the Error is governance declining this reader, as opposed
+	// to a panel that could not be computed at all. It is not serialized: the
+	// fence's shape is AIGUI's, and the distinction is for the page and the
+	// tool payload that say how many of each there are.
+	refused bool
+	Source  string `json:"source,omitempty"`
 }
 
 type column struct {
@@ -115,7 +120,7 @@ func Build(ctx context.Context, eng *engine.Engine, who governance.Principal,
 func run(ctx context.Context, eng *engine.Engine, who governance.Principal,
 	pol governance.Policy, p Panel) panel {
 
-	out := panel{Title: clip(p.Title, maxLabelLength)}
+	out := panel{Title: clip(titleOf(p), maxLabelLength)}
 	if len(p.Metrics) == 0 {
 		out.Error = "this panel names no metric"
 		return out
@@ -128,6 +133,7 @@ func run(ctx context.Context, eng *engine.Engine, who governance.Principal,
 		// read the same way to the person looking at the board: this square
 		// has no numbers, and here is the sentence that says why.
 		out.Error = err.Error()
+		out.refused = governance.HTTPStatus(err) == 403
 		out.Source = source(p.Metrics, eng.ModelHash)
 		return out
 	}
@@ -283,4 +289,25 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// titleOf is the panel's heading, or a description of what it shows.
+//
+// A panel with no title rendered as a blank heading above a table, which on a
+// board of twelve is a panel nobody can find again. Every path that builds a
+// board without writing titles hits it — a layout file, a link, an agent that
+// passed only metrics — so the default lives here, where they all meet,
+// rather than in each of them.
+func titleOf(p Panel) string {
+	if t := strings.TrimSpace(p.Title); t != "" {
+		return t
+	}
+	t := strings.Join(p.Metrics, ", ")
+	if len(p.GroupBy) > 0 {
+		t += " by " + strings.Join(p.GroupBy, ", ")
+	}
+	if p.Grain != "" {
+		t += " per " + p.Grain
+	}
+	return t
 }

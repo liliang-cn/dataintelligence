@@ -39,6 +39,11 @@
       一个角色的限制不会让整张板变白。
     </p>
   {{end}}
+  {{if .Failed}}
+    <p class="mb-5 text-sm text-amber-700 dark:text-amber-400">
+      {{.Failed}} 个面板算不出来，换任何角色都一样 —— 面板上写着编译器拒绝的原因。
+    </p>
+  {{end}}
 
   <main id="board" aria-busy="true"></main>
   <noscript><p class="text-sm text-red-600">这张看板需要 JavaScript 渲染图表。原始围栏在 <a class="underline" href="{{.FenceURL}}">{{.FenceURL}}</a>。</p></noscript>

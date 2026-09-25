@@ -11,6 +11,7 @@ import (
 	semantic "github.com/liliang-cn/semantic-go"
 
 	"github.com/liliang-cn/dataintelligence/board"
+	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/platform"
 )
@@ -55,7 +56,7 @@ func runBoard(argv []string) {
 		fail(fmt.Errorf("a board needs a semantic model: %s", strings.Join(p.Missing, "; ")))
 	}
 
-	panels, err := panelsFor(*panelsFile, *metrics, *by, *grain, *chart, p.Model())
+	panels, err := panelsFor(ctx, p.Engine, *panelsFile, *metrics, *by, *grain, *chart, p.Model())
 	if err != nil {
 		fail(err)
 	}
@@ -100,7 +101,7 @@ func runBoard(argv []string) {
 }
 
 // panelsFor decides the layout: a file, a one-panel request, or a proposal.
-func panelsFor(file, metrics, by, grain, chart string, m *semantic.Model) ([]board.Panel, error) {
+func panelsFor(ctx context.Context, eng *engine.Engine, file, metrics, by, grain, chart string, m *semantic.Model) ([]board.Panel, error) {
 	if file != "" {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -124,5 +125,7 @@ func panelsFor(file, metrics, by, grain, chart string, m *semantic.Model) ([]boa
 			Chart:   chart,
 		}}, nil
 	}
-	return board.Propose(m), nil
+	// The proposal reads the trail: a board leads with what this deployment's
+	// own people have asked for. See board/rank.go.
+	return board.ProposeFor(ctx, eng, m), nil
 }

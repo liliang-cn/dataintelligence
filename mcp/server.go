@@ -49,6 +49,7 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 		Description: "Run a governed semantic query: compute metrics, optionally grouped by dimensions. You name metrics/dimensions; the layer compiles safe SQL. Never write SQL yourself."},
 		s.queryMetric)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "brief", Description: briefDescription}, s.brief)
+	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "board", Description: boardDescription}, s.board)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "ground",
 		Description: "Resolve a natural-language question into a typed semantic query (metrics, group_by, filters, grain) WITHOUT executing it. Use to see how a question maps to the model, then pass the result to query_metric."},
 		s.ground)
@@ -73,7 +74,7 @@ func NewServer(eng *engine.Engine, opts *Options) *mcpsdk.Server {
 // package that owns them, and TestTheAdvertisedToolsAreTheServedTools asks a
 // real client session what the server actually has and fails when they differ.
 var ToolNames = []string{
-	"list_metrics", "get_dimensions", "query_metric", "brief", "ground",
+	"list_metrics", "get_dimensions", "query_metric", "brief", "board", "ground",
 	"ingest_csv", "describe_warehouse", "health_check",
 }
 

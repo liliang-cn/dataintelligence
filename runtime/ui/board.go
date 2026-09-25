@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -34,28 +35,30 @@ type boardPage struct {
 	SignedAt  string
 	SignNote  string
 	Refused   int
+	Failed    int
 	FenceURL  string
 	Dark      bool
 }
 
 func (u *UI) boardPage(w http.ResponseWriter, r *http.Request) {
 	role := roleOf(r)
-	b, err := u.buildBoard(r.Context(), role)
+	b, err := u.buildBoard(r.Context(), r, role)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	p := boardPage{
-		Title:     titleOf(u),
+		Title:     boardTitle(u, r),
 		Database:  u.Eng.WH.Driver(),
 		Role:      role,
 		ModelHash: u.Eng.ModelHash,
 		Refused:   b.Refused(),
+		Failed:    b.Failed(),
 		// The page supplies the title and the approval line itself, in the
 		// reader's language and above the numbers. Asking for the bare fence
 		// stops both appearing twice — once from the page and once from the
 		// markdown the CLI writes for a reader who has no page.
-		FenceURL: "/ui/board.md?fence=1&role=" + role,
+		FenceURL: fenceURL(r, role),
 		Dark:     r.URL.Query().Get("theme") == "dark",
 	}
 	// Who approved the definitions this board rests on. Absent is not an
@@ -74,7 +77,7 @@ func (u *UI) boardPage(w http.ResponseWriter, r *http.Request) {
 
 func (u *UI) boardFence(w http.ResponseWriter, r *http.Request) {
 	role := roleOf(r)
-	b, err := u.buildBoard(r.Context(), role)
+	b, err := u.buildBoard(r.Context(), r, role)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -106,16 +109,38 @@ func (u *UI) boardFence(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(doc))
 }
 
-// buildBoard runs the panels as the caller. A layout may be named in the
-// query string; otherwise the model proposes one.
-func (u *UI) buildBoard(ctx context.Context, role string) (*board.Board, error) {
+// buildBoard runs the panels as the caller.
+//
+// `?layout=` carries a board somebody else assembled — an agent through the
+// MCP tool, most often — so that board has a URL. Without it the proposal is
+// used, and the proposal reads the trail: what this deployment's own people
+// ask for. See board/layout.go for why the layout is in the link rather than
+// in a table.
+func (u *UI) buildBoard(ctx context.Context, r *http.Request, role string) (*board.Board, error) {
 	if u.Eng == nil || !u.Eng.Governed() {
 		return nil, fmt.Errorf("this database has no semantic model, so there are no metrics to put on a board")
 	}
-	panels := board.Propose(u.Eng.Model)
+	var panels []board.Panel
+	if enc := strings.TrimSpace(r.URL.Query().Get("layout")); enc != "" {
+		var err error
+		if panels, err = board.DecodeLayout(enc); err != nil {
+			return nil, err
+		}
+	} else {
+		panels = board.ProposeFor(ctx, u.Eng, u.Eng.Model)
+	}
 	return board.Build(ctx, u.Eng,
 		governance.Principal{User: "console", Role: role},
-		u.Pol, titleOf(u), panels)
+		u.Pol, boardTitle(u, r), panels)
+}
+
+// boardTitle lets a link name the board it carries. A dashboard somebody sent
+// is about something, and "Board" is not that.
+func boardTitle(u *UI, r *http.Request) string {
+	if t := strings.TrimSpace(r.URL.Query().Get("title")); t != "" {
+		return t
+	}
+	return titleOf(u)
 }
 
 // registry is the model registry on the engine's own warehouse handle, or nil
@@ -126,6 +151,21 @@ func (u *UI) registry() *rollout.Registry {
 		return nil
 	}
 	return rollout.New(u.Eng.WH, nowUTC)
+}
+
+// fenceURL points the page at the fence for the board it is showing. Dropping
+// the layout here would have the page fetch a different board from the one its
+// heading describes — the two routes exist so they can be compared, and a
+// comparison of two different boards is worse than no comparison.
+func fenceURL(r *http.Request, role string) string {
+	q := url.Values{"fence": {"1"}, "role": {role}}
+	if l := strings.TrimSpace(r.URL.Query().Get("layout")); l != "" {
+		q.Set("layout", l)
+	}
+	if t := strings.TrimSpace(r.URL.Query().Get("title")); t != "" {
+		q.Set("title", t)
+	}
+	return "/ui/board.md?" + q.Encode()
 }
 
 func titleOf(u *UI) string {
