@@ -169,13 +169,14 @@ func Reconcile(ctx context.Context, eng *engine.Engine, set *ReconSet) (*ReconRe
 		return nil, fmt.Errorf("reconciliation needs a semantic model")
 	}
 	rep := &ReconReport{Declared: len(eng.Model.Metrics)}
+	roles := everyRole(eng.Model)
 	for _, c := range set.Cases {
 		res := ReconResult{Metric: c.Metric, Control: c.Control, Note: c.Note,
 			Source: c.Source, Anchored: c.Anchored(), Scope: scopeLabel(c.Where)}
 		if res.Anchored {
 			rep.Anchored++
 		}
-		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.Metric}, Where: c.Where})
+		ans, err := eng.Query(ctx, semantic.Query{Metrics: []string{c.Metric}, Where: c.Where, Roles: roles})
 		if err != nil {
 			res.Error = err.Error()
 			rep.Results = append(rep.Results, res)
@@ -333,4 +334,41 @@ func AppendCase(path string, c ReconCase) error {
 	}
 	_, err = f.WriteString(body)
 	return err
+}
+
+// everyRole is the union of every role the model declares, on metrics and on
+// dimensions.
+//
+// Reconciliation asks whether a definition is right, not who may read it.
+// Since the compiler grew its own role gate (semantic-go v0.2.0), a query with
+// no roles is refused every gated metric — so net_revenue, the one metric in
+// Meridian that most needed checking against a control, failed the gate with
+// "requires one of roles [finance admin] (caller has [])" and nothing about
+// its arithmetic was tested at all. The gate that exists to prove the numbers
+// are right had quietly stopped looking at the numbers people are most careful
+// about.
+//
+// Holding every role is not a hole in the access model: this is the engineer's
+// correctness check, run against the definition, and who may read what is
+// tested where it is decided — governance, and the forged-token battery in
+// `di pentest`. It is also not "admin": a model whose finance metrics are gated
+// to `cfo` would still be refused by a gate that guessed.
+func everyRole(m *semantic.Model) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(rs []string) {
+		for _, r := range rs {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	for i := range m.Metrics {
+		add(m.Metrics[i].Roles)
+	}
+	for i := range m.Dimensions {
+		add(m.Dimensions[i].Roles)
+	}
+	return out
 }
