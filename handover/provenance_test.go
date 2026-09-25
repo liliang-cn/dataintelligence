@@ -124,7 +124,7 @@ func TestTheReportSeparatesApprovedAnswersAndLeadsWithTheWorstGap(t *testing.T) 
 	var b strings.Builder
 	p.WriteMarkdown(&b)
 	out := b.String()
-	for _, want := range []string{"2 of 11", "**9 did not.**", "张三", "口径复核", "**nobody**"} {
+	for _, want := range []string{"2 of 11", "**9 came from a definition nobody has approved.**", "张三", "口径复核", "**nobody**"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not contain %q:\n%s", want, out)
 		}

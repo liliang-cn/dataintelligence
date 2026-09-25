@@ -122,3 +122,75 @@ func seedTrail(t *testing.T, r *Registry, hash string, n int) {
 		}
 	}
 }
+
+// seedTrailAt writes n audit rows for one hash at one moment, in whatever
+// shape the engine would have written the timestamp.
+func seedTrailAt(t *testing.T, r *Registry, hash, ts string, n int) {
+	t.Helper()
+	seedTrail(t, r, hash, 0)
+	for i := 0; i < n; i++ {
+		if _, err := r.wh.Exec(context.Background(),
+			`INSERT INTO _audit (ts, "user", metrics, model_hash) VALUES (?,?,?,?)`,
+			ts, "someone", "[revenue]", hash); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A signature given today does not approve figures sent last month.
+//
+// The join is on the hash, so without the time every answer those bytes ever
+// produced read as approved the moment somebody signed them. On a real trail
+// the report said "125 of 125 answers came from an approved definition" about
+// answers that were all given before the signature existed.
+func TestAnswersGivenBeforeTheSignatureAreNotCountedAsApprovedWhenGiven(t *testing.T) {
+	r, dir := registry(t) // the registry's clock reads 2026-09-22T00:00:0NZ
+	ctx := context.Background()
+	path := write(t, dir, "m.yaml", modelA)
+	hash, _ := HashFile(path)
+
+	// Three answers the day before anybody signed, in SQLite's own
+	// datetime('now') shape; two after, in RFC 3339.
+	seedTrailAt(t, r, hash, "2026-09-21 10:00:00", 3)
+
+	if _, err := r.Register(ctx, "v1", path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Sign(ctx, "v1", "", "张三", "口径复核"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Promote(ctx, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	seedTrailAt(t, r, hash, "2026-09-22T05:00:00Z", 2)
+
+	all, err := r.Attest(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("got %+v", all)
+	}
+	a := all[0]
+	if a.Answers != 5 || !a.Promoted {
+		t.Fatalf("got %+v", a)
+	}
+	if a.BeforeApproval != 3 {
+		t.Errorf("BeforeApproval = %d, want 3: answers given before the signature were counted as approved", a.BeforeApproval)
+	}
+	if a.ApprovedAt == "" {
+		t.Error("the report does not say when the definition went live")
+	}
+}
+
+// An answer whose time cannot be read is not claimed as approved.
+func TestAnAnswerWithAnUnreadableTimeIsNotClaimedAsApproved(t *testing.T) {
+	if got := countBefore([]answerTime{{ok: false}}, "2026-09-22T00:00:01Z"); got != 1 {
+		t.Errorf("an unreadable timestamp was counted as after approval")
+	}
+	for _, v := range []any{"2026-09-21 10:00:00", "2026-09-21T10:00:00Z", []byte("2026-09-21 10:00:00"), "2026-09-21 10:00:00.123456+00"} {
+		if _, ok := parseWhen(v); !ok {
+			t.Errorf("parseWhen(%#v) could not read an engine's timestamp", v)
+		}
+	}
+}

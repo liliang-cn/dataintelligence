@@ -72,7 +72,11 @@ func (r *Registry) Sign(ctx context.Context, name, hash, by, note string) (*Vers
 	if err := r.save(ctx, v); err != nil {
 		return nil, err
 	}
-	return v, r.record(ctx, "sign", v.Name, by, "", onDisk, "", note)
+	if err := r.record(ctx, "sign", v.Name, by, "", onDisk, "", note); err != nil {
+		return v, err
+	}
+	r.mirror(ctx, "sign", v.Name, onDisk)
+	return v, nil
 }
 
 // requireSignature is the gate Promote runs before making anything live.

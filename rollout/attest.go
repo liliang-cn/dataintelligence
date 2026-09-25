@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Which answers came from a definition somebody approved.
@@ -51,6 +53,19 @@ type Attestation struct {
 	SignedAt string
 	Note     string
 	Promoted bool // whether it was ever made active through the registry
+
+	// ApprovedAt is when these bytes first went live through the registry,
+	// and BeforeApproval is how many of the answers were given before that.
+	//
+	// The join is on the hash, and a hash signed today matches every answer
+	// those bytes ever produced — so without the time, a signature given this
+	// afternoon approved figures sent last month. On a real trail that read
+	// "125 of 125 answers came from an approved definition" about 125 answers
+	// that were all given before anybody signed. An audit asks whether a
+	// figure was approved when it was sent; "it is approved now" is a
+	// different answer and has to be reported as one.
+	ApprovedAt     string
+	BeforeApproval int
 }
 
 // Attest reads the trail back and reports, per model hash, how many answers it
@@ -64,14 +79,18 @@ func (r *Registry) Attest(ctx context.Context) ([]Attestation, error) {
 		return nil, err
 	}
 	counts := map[string]int{}
-	res, err := r.wh.Query(ctx, "SELECT model_hash FROM _audit")
+	when := map[string][]answerTime{}
+	res, err := r.wh.Query(ctx, "SELECT model_hash, ts FROM _audit")
 	if err != nil {
 		// No trail is not an error: nobody has asked anything yet. A missing
 		// model_hash column is the same case seen from an older deployment.
 		return nil, fmt.Errorf("no audit trail to read (%w) — has anyone asked a question yet?", err)
 	}
 	for _, row := range res.Rows {
-		counts[text(row[0])]++
+		h := text(row[0])
+		counts[h]++
+		t, ok := parseWhen(row[1])
+		when[h] = append(when[h], answerTime{t: t, ok: ok})
 	}
 
 	signed := map[string]Attestation{}
@@ -93,6 +112,9 @@ func (r *Registry) Attest(ctx context.Context) ([]Attestation, error) {
 			if a.SignedBy == "" {
 				a.SignedBy, a.SignedAt = e.By, e.At
 			}
+			if a.ApprovedAt == "" || e.At < a.ApprovedAt {
+				a.ApprovedAt = e.At
+			}
 		}
 		signed[e.ToHash] = a
 	}
@@ -101,6 +123,9 @@ func (r *Registry) Attest(ctx context.Context) ([]Attestation, error) {
 	for h, n := range counts {
 		a := signed[h]
 		a.Hash, a.Answers = h, n
+		if a.Promoted {
+			a.BeforeApproval = countBefore(when[h], a.ApprovedAt)
+		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -157,4 +182,47 @@ func Unattested(all []Attestation) []Attestation {
 		}
 	}
 	return out
+}
+
+type answerTime struct {
+	t  time.Time
+	ok bool
+}
+
+// countBefore counts answers given before approval. An answer whose time
+// cannot be read is counted as before: the report is about what can be shown
+// to have been approved, and an unreadable timestamp shows nothing.
+func countBefore(ts []answerTime, approvedAt string) int {
+	at, err := time.Parse(time.RFC3339, approvedAt)
+	if err != nil {
+		return len(ts)
+	}
+	n := 0
+	for _, a := range ts {
+		if !a.ok || a.t.Before(at) {
+			n++
+		}
+	}
+	return n
+}
+
+// parseWhen reads the trail's timestamp however the engine returned it:
+// Postgres hands back a time.Time, SQLite the text of datetime('now') in UTC,
+// MySQL either, depending on the driver's parseTime setting.
+func parseWhen(v any) (time.Time, bool) {
+	switch t := v.(type) {
+	case time.Time:
+		return t, true
+	case []byte:
+		return parseWhen(string(t))
+	case string:
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339,
+			"2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05.999999999-07",
+			"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+			if p, err := time.Parse(layout, strings.TrimSpace(t)); err == nil {
+				return p, true
+			}
+		}
+	}
+	return time.Time{}, false
 }

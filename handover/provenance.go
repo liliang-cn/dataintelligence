@@ -31,12 +31,15 @@ import (
 
 // Provenance is the answer-to-approval join over one trail.
 type Provenance struct {
-	Database   string                `json:"database"`
-	Engagement string                `json:"engagement,omitempty"`
-	Answers    int                   `json:"answers"`
-	Approved   int                   `json:"approved"`
-	Models     []rollout.Attestation `json:"models"`
-	Registry   bool                  `json:"registry_in_use"`
+	Database   string `json:"database"`
+	Engagement string `json:"engagement,omitempty"`
+	Answers    int    `json:"answers"`
+	Approved   int    `json:"approved"`
+	// BeforeApproval is answers from a definition that is approved now but
+	// was not yet when the answer was given.
+	BeforeApproval int                   `json:"before_approval"`
+	Models         []rollout.Attestation `json:"models"`
+	Registry       bool                  `json:"registry_in_use"`
 }
 
 // Attest reads the trail and the ledger and joins them on the model hash.
@@ -50,7 +53,11 @@ func Attest(ctx context.Context, eng *engine.Engine, database, engagement string
 	for _, m := range models {
 		p.Answers += m.Answers
 		if m.Promoted {
-			p.Approved += m.Answers
+			// Only the answers given after the definition went live were
+			// approved when they were given; the rest were approved later,
+			// if at all from the recipient's point of view.
+			p.Approved += m.Answers - m.BeforeApproval
+			p.BeforeApproval += m.BeforeApproval
 			p.Registry = true
 		}
 	}
@@ -94,16 +101,22 @@ func (p *Provenance) WriteMarkdown(w io.Writer) {
 		return
 	}
 
-	pr("**%d of %d answer(s)** came from a definition somebody approved.", p.Approved, p.Answers)
-	if n := p.Unapproved(); n > 0 {
+	pr("**%d of %d answer(s)** came from a definition somebody had approved when the answer was given.", p.Approved, p.Answers)
+	if p.BeforeApproval > 0 {
 		pr("")
-		pr("**%d did not.** Those are the figures nobody can stand behind: the model", n)
+		pr("**%d were given before their definition was approved.** The definition is", p.BeforeApproval)
+		pr("approved now, but it was not when those figures were sent: whoever received")
+		pr("them received an unapproved number, and signing afterwards does not change that.")
+	}
+	if n := p.Unapproved() - p.BeforeApproval; n > 0 {
+		pr("")
+		pr("**%d came from a definition nobody has approved.** Those are the figures nobody can stand behind: the model", n)
 		pr("that produced them was never promoted through the registry, so there is no")
 		pr("name and no date attached to the definition they used.")
 	}
 	pr("")
-	pr("| Model | Answers | Approved by | When | Why |")
-	pr("|---|---:|---|---|---|")
+	pr("| Model | Answers | Before approval | Approved by | When | Why |")
+	pr("|---|---:|---:|---|---|---|")
 	for _, m := range p.Models {
 		hash := m.Hash
 		if hash == "" {
@@ -113,7 +126,7 @@ func (p *Provenance) WriteMarkdown(w io.Writer) {
 		if !m.Promoted {
 			who = "**nobody**"
 		}
-		pr("| `%s` | %d | %s | %s | %s |", hash, m.Answers, orDash(who), orDash(m.SignedAt), orDash(m.Note))
+		pr("| `%s` | %d | %d | %s | %s | %s |", hash, m.Answers, m.BeforeApproval, orDash(who), orDash(m.SignedAt), orDash(m.Note))
 	}
 }
 
@@ -123,7 +136,8 @@ func (p *Provenance) Summary() string {
 		return "no answers to trace yet"
 	}
 	if n := p.Unapproved(); n > 0 {
-		return fmt.Sprintf("%d of %d answer(s) came from a definition nobody approved", n, p.Answers)
+		return fmt.Sprintf("%d of %d answer(s) were not approved when given (%d before their definition was signed, %d from one nobody approved)",
+			n, p.Answers, p.BeforeApproval, n-p.BeforeApproval)
 	}
 	return fmt.Sprintf("all %d answer(s) came from an approved definition", p.Answers)
 }

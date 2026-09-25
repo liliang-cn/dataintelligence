@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 	semantic "github.com/liliang-cn/semantic-go"
 
 	"github.com/liliang-cn/dataintelligence/warehouse"
@@ -54,6 +55,11 @@ type Registry struct {
 	wh *warehouse.Warehouse
 	// nowStr is injected so the package stays deterministic-friendly.
 	nowStr func() string
+
+	// brain, when attached, receives a Decision for every ledger line; report
+	// is told when that write fails. Both are optional — see mirror.go.
+	brain  *cortexdb.DB
+	report func(error)
 }
 
 func New(wh *warehouse.Warehouse, nowStr func() string) *Registry {
@@ -172,8 +178,12 @@ func (r *Registry) Promote(ctx context.Context, name string) (changed []string, 
 	// judgement was made when the model was signed, and crediting the operator
 	// who typed the command with it would put a name on a decision they did not
 	// make.
-	return changed, r.record(ctx, "promote", cand.Name, cand.SignedBy,
-		from, cand.SignedHash, strings.Join(changed, " "), cand.SignNote)
+	if err := r.record(ctx, "promote", cand.Name, cand.SignedBy,
+		from, cand.SignedHash, strings.Join(changed, " "), cand.SignNote); err != nil {
+		return changed, err
+	}
+	r.mirror(ctx, "promote", cand.Name, cand.SignedHash)
+	return changed, nil
 }
 
 // Rollback is the panic button: demote the current canary back to candidate,
@@ -211,7 +221,11 @@ func (r *Registry) Rollback(ctx context.Context) (*Version, error) {
 			if err := r.save(ctx, v); err != nil {
 				return nil, err
 			}
-			return v, r.record(ctx, "rollback", v.Name, v.SignedBy, "", v.SignedHash, "", "restored by rollback")
+			if err := r.record(ctx, "rollback", v.Name, v.SignedBy, "", v.SignedHash, "", "restored by rollback"); err != nil {
+				return v, err
+			}
+			r.mirror(ctx, "rollback", v.Name, v.SignedHash)
+			return v, nil
 		}
 	}
 	return nil, nil
