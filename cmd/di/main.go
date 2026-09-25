@@ -156,6 +156,8 @@ func rootCmd() *cobra.Command {
 		leaf("bench", "model", "Public benchmark (Spider): coverage + correctness", runBench),
 		leaf("shadow", "model", "Diff a query across two model versions", runShadow),
 		leaf("rollout", "model", "Version registry, canary, auto-rollback", runRollout),
+		leaf("intake", "gov", "Sign off on reading a customer database before anything reads it", runIntake),
+		leaf("reported", "model", "Freeze what was sent; later, say why today's number differs", runReported),
 		// governance & security
 		leaf("threats", "gov", "Threat-model-as-code gate", runThreats),
 		leaf("pentest", "gov", "MCP security regression (forged-token battery)", runPentest),
@@ -332,7 +334,7 @@ func runServe(argv []string) {
 	go func() { errc <- serveNamed("REST /v1", rest) }()
 	go func() { errc <- serveNamed("MCP", mcpSrv) }()
 	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/ui\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
-		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, "list_metrics/get_dimensions/query_metric", authNote, cfg.Server.OTel)
+		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, strings.Join(mcpserver.ToolNames, "/"), authNote, cfg.Server.OTel)
 	ids := reg.IDs()
 	fmt.Fprintf(os.Stderr, "  databases (%d, default %q):\n", len(ids), reg.Default())
 	for _, id := range ids {
@@ -568,9 +570,18 @@ func runModelGen(argv []string) {
 	}
 	defer wh.Close()
 
+	// Introspection counts rows and takes the extremes of every integer
+	// column, and -llm sends every column name to a model. Both are reads of
+	// the customer's data, so both wait for a signature.
+	plan := requireIntake(ctx, wh, *dsn)
+	fmt.Fprintf(os.Stderr, "-- intake plan %s, signed by %s\n", plan.Short(), plan.SignedBy)
+
 	schema, err := modelgen.Introspect(ctx, wh)
 	if err != nil {
 		fail(err)
+	}
+	if w := withholdRedacted(schema, plan); len(w) > 0 {
+		fmt.Fprintf(os.Stderr, "-- withheld %d redacted column(s): %s\n", len(w), strings.Join(w, ", "))
 	}
 	fmt.Fprintf(os.Stderr, "-- introspected %d table(s)\n", len(schema.Tables))
 
@@ -586,6 +597,7 @@ func runModelGen(argv []string) {
 	if err != nil {
 		fail(err)
 	}
+	maskPlanned(model, plan)
 	yamlOut, err := modelgen.ToYAML(model)
 	if err != nil {
 		fail(err)
@@ -916,11 +928,13 @@ func boolStr(b bool, t, f string) string {
 //	di rollout promote -name v2     # refuses unless signed; prints lineage delta
 //	di rollout ledger               # who changed which numbers, and when
 //	di rollout attest               # which answers came from a signed definition
+//	di rollout history -name v2     # the decision chain in the brain: signed, superseded, why
+//	di rollout resync               # write ledger lines the brain missed
 //	di rollout rollback             # panic button
 //	di rollout simulate -pct 10 -n 1000
 func runRollout(argv []string) {
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: di rollout <register|list|canary|sign|promote|rollback|ledger|attest|simulate> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: di rollout <register|list|canary|sign|promote|rollback|ledger|attest|history|resync|simulate> [flags]")
 		os.Exit(2)
 	}
 	sub, rest := argv[0], argv[1:]
@@ -943,6 +957,11 @@ func runRollout(argv []string) {
 	}
 	defer wh.Close()
 	reg := rollout.New(wh, func() string { return time.Now().UTC().Format(time.RFC3339) })
+	// Without the brain the signatures land only in the warehouse ledger,
+	// and DecisionChain has nothing to walk. The mirror is best-effort by
+	// design (see rollout/mirror.go); a deployment with no brain still signs.
+	closeBrain := attachBrain(ctx, reg)
+	defer closeBrain()
 
 	switch sub {
 	case "register":
@@ -1000,6 +1019,33 @@ func runRollout(argv []string) {
 			}
 			fmt.Println(line)
 		}
+	case "history":
+		h, err := reg.History(ctx, *name)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s  %s  hash %s\n", h.Name, h.Status, h.Hash)
+		for _, d := range h.Chain.Decisions {
+			line := fmt.Sprintf("  %-20s %-17s by %-10s", d.At, d.Kind, d.Actor)
+			// The note carries the prose on its first line and a machine
+			// payload after it; a person reading the chain wants the prose.
+			if first, _, _ := strings.Cut(d.Note, "\n"); first != "" {
+				line += "  — " + first
+			}
+			fmt.Println(line)
+		}
+		if len(h.Chain.Decisions) == 0 {
+			fmt.Println("  (no decision in the brain for this version yet)")
+		}
+		if n := len(h.Unmirrored); n > 0 {
+			fmt.Printf("\n%d ledger line(s) for this version are not in the brain — `di rollout resync` writes them\n", n)
+		}
+	case "resync":
+		n, err := reg.Resync(ctx)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Printf("wrote %d decision(s) from the ledger into the brain\n", n)
 	case "attest":
 		all, err := reg.Attest(ctx)
 		if err != nil {
@@ -1021,6 +1067,8 @@ func runRollout(argv []string) {
 			line := fmt.Sprintf("%-22s %6d answers  signed by %s", h, a.Answers, who)
 			if !a.Promoted {
 				line += "  ** never promoted through the registry **"
+			} else if a.BeforeApproval > 0 {
+				line += fmt.Sprintf("  (%d given before it went live on %s)", a.BeforeApproval, a.ApprovedAt)
 			}
 			if a.Note != "" {
 				line += "  — " + a.Note
@@ -3647,6 +3695,12 @@ func runSurvey(argv []string) {
 	}
 	defer wh.Close()
 
+	// A survey reads distinct values and samples rows: the customer's data,
+	// in the clear, before a model exists to govern it. It needs the same
+	// signature `model gen` does.
+	plan := requireIntake(ctx, wh, target)
+	fmt.Fprintf(os.Stderr, "-- intake plan %s, signed by %s\n", plan.Short(), plan.SignedBy)
+
 	rep, err := survey.Run(ctx, wh, name, survey.Options{
 		MaxDistinct: *maxDistinct, StaleAfter: *stale, SkipOrphans: *skipFK,
 		SampleAbove: *sampleAbove, SampleRows: *sampleRows,
@@ -3694,6 +3748,7 @@ func runDrift(argv []string) {
 			name, m, d, r = n, em, ed, er
 		}
 	}
+	m, d = fromEnvIfUnset(m, d)
 	if m == "" {
 		fail(fmt.Errorf("drift needs a modelled database — an unmodelled one has nothing to drift from"))
 	}
@@ -3770,6 +3825,27 @@ func runHandover(argv []string) {
 	}
 }
 
+// fromEnvIfUnset fills what neither the flags nor an engagement supplied from
+// DI_DSN and DI_MODEL, which every other command reads.
+//
+// drift and adoption resolved only from flags or an engagement, so with
+// DI_DSN exported and no engagement.yaml nearby they handed an empty DSN to
+// the driver — which read it as "the local socket, as the current user" and
+// failed with `failed to connect to user=liliang database=`, an error about a
+// database nobody asked for.
+func fromEnvIfUnset(model, dsn string) (string, string) {
+	if dsn == "" {
+		dsn = os.Getenv("DI_DSN")
+	}
+	if model == "" {
+		model = os.Getenv("DI_MODEL")
+	}
+	if dsn == "" {
+		fail(fmt.Errorf("no database to read: pass -dsn, set DI_DSN, or run from an engagement directory"))
+	}
+	return model, dsn
+}
+
 // runAdoption reads the audit trail back: who used this, and what nobody asked for.
 func runAdoption(argv []string) {
 	fs := flag.NewFlagSet("adoption", flag.ExitOnError)
@@ -3787,6 +3863,7 @@ func runAdoption(argv []string) {
 			name, m, d = n, em, ed
 		}
 	}
+	m, d = fromEnvIfUnset(m, d)
 	ctx := context.Background()
 	eng, err := engine.New(ctx, m, d)
 	if err != nil {
@@ -3840,7 +3917,7 @@ func runDelta(argv []string) {
 	}
 	var loaded []*engagement.Engagement
 	for _, p := range paths {
-		e, lerr := engagement.Load(p)
+		e, lerr := engagement.LoadRecord(p)
 		if lerr != nil {
 			// One unreadable engagement must not hide the gaps recorded in the
 			// other nineteen.
@@ -3850,6 +3927,9 @@ func runDelta(argv []string) {
 		loaded = append(loaded, e)
 	}
 	if len(loaded) == 0 {
+		if len(paths) > 0 {
+			fail(fmt.Errorf("found %d engagement.yaml under %s and could read none of them (see above)", len(paths), *root))
+		}
 		fail(fmt.Errorf("no engagement.yaml found under %s", *root))
 	}
 

@@ -52,6 +52,8 @@ import (
 	"github.com/liliang-cn/dataintelligence/corpus"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/grounding"
+	"github.com/liliang-cn/dataintelligence/intake"
+	"github.com/liliang-cn/dataintelligence/reported"
 	"github.com/liliang-cn/dataintelligence/rollout"
 )
 
@@ -82,6 +84,8 @@ type Platform struct {
 	Rules     *rules.Store        // derivation rules, with a ledger
 	Snapshots *snapshots.Store    // named moments of the brain
 	Ontology  *ontologies.Store   // the vocabulary documents load under
+	Intake    *intake.Store       // who signed off on reading the customer's database
+	Reported  *reported.Store     // what was actually sent, frozen
 
 	ModelHash string
 	Missing   []string
@@ -154,7 +158,24 @@ func Open(ctx context.Context, cfg Config) (*Platform, error) {
 		} else {
 			p.Brain = db
 			p.closers = append(p.closers, func() { _ = db.Close() })
-			p.Corpus = corpus.Wrap(db)
+			p.Corpus = corpus.Wrap(db, emb)
+			// Every signature the registry records is also a decision in the
+			// brain, where DecisionChain can walk it. The ledger in the
+			// warehouse stays the source of truth — attest joins it to the
+			// trail — and this is the copy that can be followed backwards.
+			if p.Registry != nil {
+				p.Registry.WithBrain(db)
+			}
+			if s, err := intake.New(db); err != nil {
+				miss("intake", err.Error())
+			} else {
+				p.Intake = s
+			}
+			if s, err := reported.New(db, reported.WithRegistry(p.Registry)); err != nil {
+				miss("reported", err.Error())
+			} else {
+				p.Reported = s
+			}
 			// The three athanor workflows all sit on the same brain, which is
 			// what lets a rule's conclusion, a snapshot's contents and a
 			// document's vocabulary refer to one another.
@@ -219,6 +240,8 @@ func (p *Platform) Status() string {
 	line("graph", p.Brain != nil, "可解释的口径结构")
 	line("rules", p.Rules != nil, "推导规则")
 	line("snapshots", p.Snapshots != nil, "具名时刻")
+	line("intake", p.Intake != nil, "读客户库之前的签字")
+	line("reported", p.Reported != nil, "报出去的数，冻结")
 	line("ontology", p.Ontology != nil, "装载用的词表")
 	for _, m := range p.Missing {
 		fmt.Fprintf(&b, "\n-- %s", m)
