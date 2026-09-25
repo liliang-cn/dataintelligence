@@ -262,10 +262,21 @@ func (e *Engine) now() int64 {
 	return nowNs()
 }
 
-func (e *Engine) save(ctx context.Context, prop *Proposal) error {
-	if _, err := e.WH.Exec(ctx, `CREATE TABLE IF NOT EXISTS _proposals (
+// ensureProposals creates the proposal table on first use.
+//
+// save always did this and the readers did not, so on a warehouse where
+// nothing had been proposed yet `di proposals` answered with the raw driver
+// error `relation "_proposals" does not exist` — an accurate description of a
+// table and no answer to the question, which was "is anything waiting".
+func (e *Engine) ensureProposals(ctx context.Context) error {
+	_, err := e.WH.Exec(ctx, `CREATE TABLE IF NOT EXISTS _proposals (
 		id text PRIMARY KEY, kind text, status text, proposer text, approver text,
-		doc jsonb, at timestamptz DEFAULT now())`); err != nil {
+		doc jsonb, at timestamptz DEFAULT now())`)
+	return err
+}
+
+func (e *Engine) save(ctx context.Context, prop *Proposal) error {
+	if err := e.ensureProposals(ctx); err != nil {
 		return err
 	}
 	doc, err := json.Marshal(prop)
@@ -289,6 +300,9 @@ func (e *Engine) audit(ctx context.Context, prop *Proposal, action string) {
 
 // Get / List for the CLI + API.
 func (e *Engine) Get(ctx context.Context, id string) (*Proposal, error) {
+	if err := e.ensureProposals(ctx); err != nil {
+		return nil, err
+	}
 	res, err := e.WH.Query(ctx, `SELECT doc FROM _proposals WHERE id=$1`, id)
 	if err != nil {
 		return nil, err
@@ -302,6 +316,9 @@ func (e *Engine) Get(ctx context.Context, id string) (*Proposal, error) {
 func (e *Engine) List(ctx context.Context, limit int) ([]*Proposal, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if err := e.ensureProposals(ctx); err != nil {
+		return nil, err
 	}
 	res, err := e.WH.Query(ctx, fmt.Sprintf(`SELECT doc FROM _proposals ORDER BY at DESC LIMIT %d`, limit))
 	if err != nil {

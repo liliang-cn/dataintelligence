@@ -83,7 +83,23 @@ type Engagement struct {
 // Relative-to-the-file matters: an engineer runs these commands from wherever
 // they happen to be, and a model path that only works from one directory turns
 // a reproducible delivery into a personal one.
-func Load(path string) (*Engagement, error) {
+func Load(path string) (*Engagement, error) { return load(path, true) }
+
+// LoadRecord reads an engagement for a command that will not connect to any of
+// its databases — a rollup of what the product could not do, a report of what
+// was delivered.
+//
+// Load refuses a file whose ${VARS} are unset, and for a command about to
+// connect that is right. For `di delta` it was not: delta reads the gaps
+// recorded across every engagement under a directory, and so demanded every
+// customer's database credentials in the engineer's shell before it would
+// count them — and with one missing it skipped the file and then reported
+// that no engagement.yaml existed at all. An unset variable is left in place
+// as the literal ${NAME}, which cannot be mistaken for a working DSN by
+// anything that later tries one.
+func LoadRecord(path string) (*Engagement, error) { return load(path, false) }
+
+func load(path string, needCredentials bool) (*Engagement, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -92,7 +108,7 @@ func Load(path string) (*Engagement, error) {
 	// unset ${ERP_DSN} into an empty string, and an empty DSN surfaces as
 	// "database erp needs a dsn" — true, unhelpful, and pointing at the file
 	// rather than at the environment that is actually wrong.
-	if missing := unsetVars(string(raw)); len(missing) > 0 {
+	if missing := unsetVars(string(raw)); needCredentials && len(missing) > 0 {
 		return nil, fmt.Errorf("%s: these variables are not set: %s", path, strings.Join(missing, ", "))
 	}
 	// Read the variable names off the unexpanded file: after expansion they are
@@ -100,8 +116,17 @@ func Load(path string) (*Engagement, error) {
 	// needs them to reference secrets rather than inline the password.
 	rawVars := dsnVars(string(raw))
 
+	expanded := os.ExpandEnv(string(raw))
+	if !needCredentials {
+		expanded = os.Expand(string(raw), func(k string) string {
+			if v, ok := os.LookupEnv(k); ok {
+				return v
+			}
+			return "${" + k + "}"
+		})
+	}
 	var e Engagement
-	if err := strictyaml.Unmarshal(path, []byte(os.ExpandEnv(string(raw))), &e); err != nil {
+	if err := strictyaml.Unmarshal(path, []byte(expanded), &e); err != nil {
 		return nil, err
 	}
 	abs, err := filepath.Abs(path)

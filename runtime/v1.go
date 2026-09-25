@@ -224,7 +224,7 @@ func (v *V1) queryV1(w http.ResponseWriter, r *http.Request) {
 	q := semantic.Query{Metrics: body.Metrics, GroupBy: body.GroupBy, Where: body.Where, TimeGrain: body.Grain, Limit: body.Limit}
 	ans, err := governance.Query(r.Context(), eng, q, p, v.Pol)
 	if err != nil {
-		writeErr(w, 403, err)
+		writeErr(w, governance.HTTPStatus(err), err)
 		return
 	}
 	writeJSON(w, 200, answerEnvelope(ans))
@@ -295,7 +295,7 @@ func (v *V1) askV1(w http.ResponseWriter, r *http.Request) {
 	p.Question = body.Question
 	ans, err := governance.Query(r.Context(), eng, q, p, v.Pol)
 	if err != nil {
-		writeErr(w, 403, err)
+		writeErr(w, governance.HTTPStatus(err), err)
 		return
 	}
 	env := answerEnvelope(ans)

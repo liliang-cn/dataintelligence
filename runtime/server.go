@@ -111,7 +111,7 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 		return governance.Query(r.Context(), s.eng, q, p, governance.DefaultPolicy())
 	})
 	if err != nil {
-		writeErr(w, 403, err)
+		writeErr(w, governance.HTTPStatus(err), err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{

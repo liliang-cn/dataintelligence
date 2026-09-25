@@ -7,10 +7,9 @@ package config
 
 import (
 	"fmt"
+	"github.com/liliang-cn/dataintelligence/internal/strictyaml"
 	"os"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config is the whole service configuration.
@@ -104,8 +103,13 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Strict: an unknown key is an error, not a silent default. With the
+	// lenient decoder `server: {addr: ":38417"}` — a key that does not exist —
+	// parsed cleanly, and the service came up on its default ports without a
+	// word, which is the one outcome an operator who just set a port cannot
+	// diagnose from anything the service says.
 	var c Config
-	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(raw))), &c); err != nil {
+	if err := strictyaml.Unmarshal(path, []byte(os.ExpandEnv(string(raw))), &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()

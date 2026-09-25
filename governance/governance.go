@@ -6,6 +6,7 @@ package governance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -91,7 +92,7 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	// may name a metric by any declared synonym (e.g. 营收 → revenue).
 	if err := eng.Model.ResolveMetrics(&q); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())
-		return nil, err
+		return nil, &Invalid{err}
 	}
 	// Same for group-by dimension synonyms (e.g. 大区 → store_region). Unknown
 	// names are left for the compiler's dimension diagnostics.
@@ -116,7 +117,7 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	q.Roles = rolesOf(p)
 	if err := authorize(eng.Model, q.Metrics, p.Role); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())
-		return nil, err
+		return nil, &Refused{err}
 	}
 	// 1b) Per-tenant spend budget — refuse once the tenant's cumulative cost
 	// over the ledger window has exceeded its allowance.
@@ -126,13 +127,13 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 		if spent, _, lerr := ledger.Spent(ctx, tenantKey(p)); lerr == nil && spent >= pol.TenantBudgetBytes {
 			err := fmt.Errorf("tenant %q over budget: %d of %d bytes spent — refused", tenantKey(p), spent, pol.TenantBudgetBytes)
 			audit(ctx, eng, p, q, "", true, err.Error())
-			return nil, err
+			return nil, &Refused{err}
 		}
 	}
 	// 2) Row-level security — append filters bound to the caller's attributes.
 	if err := applyRLS(&q, p, pol); err != nil {
 		audit(ctx, eng, p, q, "", true, err.Error())
-		return nil, err
+		return nil, &Refused{err}
 	}
 	// 3) k-anonymity prep — add the cohort-count metric when grouping by a protected dim.
 	addedCount := false
@@ -146,7 +147,7 @@ func Query(ctx context.Context, eng *engine.Engine, q semantic.Query, p Principa
 	ans, err := eng.QueryAs(ctx, q, sessionFor(p, pol))
 	if err != nil {
 		audit(ctx, eng, p, q, "", false, err.Error())
-		return nil, err
+		return nil, classify(err)
 	}
 	// 5) k-anonymity suppress — drop cohorts below K, then hide the count column.
 	if addedCount {
@@ -469,4 +470,56 @@ func auditProblem(driver string, err error) {
 	if _, seen := auditWarned.LoadOrStore(driver, true); !seen {
 		fmt.Fprintf(os.Stderr, "-- audit trail is NOT being written (%s): %v\n", driver, err)
 	}
+}
+
+// Refused is governance declining a request the caller is not allowed to make:
+// a metric their role may not read, a tenant over budget, a row filter they
+// cannot satisfy. Invalid is a request that could not mean anything: a metric
+// that does not exist, a query that does not compile.
+//
+// Both keep the message exactly as it was — the pentest battery and every
+// caller that shows it to a person read it — and only add what kind of no it
+// is. Without the kind, the REST layer answered every error with 403: "no such
+// metric" read as "forbidden", and a warehouse that was down read as a
+// permissions problem, which sends an operator to the one place the fault is
+// not.
+type Refused struct{ Err error }
+
+func (e *Refused) Error() string { return e.Err.Error() }
+func (e *Refused) Unwrap() error { return e.Err }
+
+// Invalid: see Refused.
+type Invalid struct{ Err error }
+
+func (e *Invalid) Error() string { return e.Err.Error() }
+func (e *Invalid) Unwrap() error { return e.Err }
+
+// classify sorts an execution error. The compiler's own role gate covers the
+// formula operands authorize never sees, and its refusal is a refusal however
+// deep it surfaced; anything else the compiler rejected is the request's
+// fault; what remains happened in the warehouse.
+func classify(err error) error {
+	var re *semantic.RoleError
+	switch {
+	case errors.As(err, &re):
+		return &Refused{err}
+	case strings.HasPrefix(err.Error(), "compile: "):
+		return &Invalid{err}
+	}
+	return err
+}
+
+// HTTPStatus is the status a governed query's error deserves: 403 when
+// governance said no, 400 when the request was not a query, 502 when the
+// warehouse behind it failed.
+func HTTPStatus(err error) int {
+	var r *Refused
+	var i *Invalid
+	switch {
+	case errors.As(err, &r):
+		return 403
+	case errors.As(err, &i):
+		return 400
+	}
+	return 502
 }

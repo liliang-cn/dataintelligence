@@ -130,6 +130,17 @@ func Search(ctx context.Context, eng *engine.Engine, metric string, target float
 
 	var times, cats []semantic.Dimension
 	for _, d := range eng.Model.Dimensions {
+		// A masked dimension is not a scope a published figure can have.
+		// Grouped by, every value collapses into the one mask literal, so
+		// "customer_email = ***" reproduced the whole-warehouse total and
+		// turned a figure that anchored cleanly into an "ambiguous" one, with
+		// a second candidate nobody could act on: the compiler refuses a
+		// filter on a masked dimension, so -pick 2 could never have run.
+		// It also has no business being enumerated at all — searching a
+		// revenue figure should not read every customer's email to do it.
+		if d.Mask != "" {
+			continue
+		}
 		if d.Type == "time" {
 			times = append(times, d)
 		} else {

@@ -34,6 +34,15 @@ func groundTestModel(t *testing.T) *semantic.Model {
 // TestGroundTool exercises the new `ground` MCP tool end to end (retrieval +
 // keyword fallback; no LLM, no warehouse) and checks it returns a typed query.
 func TestGroundTool(t *testing.T) {
+	// The comment above says no LLM, and with LLM_* set in the shell it was
+	// not true: grounding wires whatever endpoint the environment names, and
+	// this test then graded a remote model's answer — seconds per run, and a
+	// result that depends on somebody else's service. Cleared, it tests the
+	// keyword path it says it tests.
+	for _, k := range []string{"LLM_BASE_URL", "LLM_BASE", "OPENAI_BASE_URL", "LLM_MODEL", "OPENAI_MODEL",
+		"LLM_API_KEY", "LLM_KEY", "OPENAI_API_KEY", "DI_EMBED_BASE_URL", "DI_EMBED_API_KEY", "DI_EMBED_MODEL"} {
+		t.Setenv(k, "")
+	}
 	ctx := context.Background()
 	gr, err := grounding.New(ctx, groundTestModel(t), filepath.Join(t.TempDir(), "idx.db"))
 	if err != nil {

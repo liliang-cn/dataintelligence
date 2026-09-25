@@ -223,7 +223,13 @@ func (e *Engine) save(ctx context.Context, run *Run) error {
 	return err
 }
 
+// Get and List create the table before reading it, for the reason writeback's
+// readers do: on a warehouse no flow has run against, `di flow list` answered
+// `relation "_flow_runs" does not exist` to the question "has anything run".
 func (e *Engine) Get(ctx context.Context, id string) (*Run, error) {
+	if err := e.ensureTable(ctx); err != nil {
+		return nil, err
+	}
 	res, err := e.wh.Query(ctx, `SELECT doc FROM _flow_runs WHERE id=$1`, id)
 	if err != nil {
 		return nil, err
@@ -235,6 +241,9 @@ func (e *Engine) Get(ctx context.Context, id string) (*Run, error) {
 }
 
 func (e *Engine) List(ctx context.Context) ([]*Run, error) {
+	if err := e.ensureTable(ctx); err != nil {
+		return nil, err
+	}
 	res, err := e.wh.Query(ctx, `SELECT doc FROM _flow_runs ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
