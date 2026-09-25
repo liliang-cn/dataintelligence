@@ -142,7 +142,33 @@ func TableNames(ctx context.Context, wh *warehouse.Warehouse) ([]string, error) 
 
 // Introspect reads the user tables of a warehouse, skipping the platform's own
 // bookkeeping tables (those prefixed with "_").
+//
+// It reads rows as well as the catalogue — a count per table, a sample of
+// every TEXT column on SQLite, distinct values of integer columns — which is
+// what makes the draft good and what makes it a read of the customer's data.
 func Introspect(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {
+	s, err := Catalogue(ctx, wh)
+	if err != nil {
+		return nil, err
+	}
+	for i := range s.Tables {
+		t := &s.Tables[i]
+		if wh.Driver() == "sqlite" {
+			retypeSQLiteDates(ctx, wh, t)
+		}
+		markCategoricalIntegers(ctx, wh, t, rowsOf(ctx, wh, t.Name))
+	}
+	return s, nil
+}
+
+// Catalogue is Introspect without a single row read: tables, declared column
+// types and keys, all from the engine's catalogue.
+//
+// It is split out for the intake plan, which has to describe the database
+// before anybody has agreed that its rows may be read. A proposal that sampled
+// the phone column in order to decide whether to ask about the phone column
+// would have answered its own question the wrong way.
+func Catalogue(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {
 	p, ok := probes[wh.Driver()]
 	if !ok {
 		return nil, fmt.Errorf("modelgen: no schema introspection for driver %q — supported: postgres, mysql, sqlite, sqlserver", wh.Driver())
@@ -167,10 +193,6 @@ func Introspect(ctx context.Context, wh *warehouse.Warehouse) (*Schema, error) {
 		if t.ForeignKeys, err = foreignKeysOf(ctx, wh, p, name); err != nil {
 			return nil, err
 		}
-		if wh.Driver() == "sqlite" {
-			retypeSQLiteDates(ctx, wh, &t)
-		}
-		markCategoricalIntegers(ctx, wh, &t, rowsOf(ctx, wh, t.Name))
 		s.Tables = append(s.Tables, t)
 	}
 	return &s, nil

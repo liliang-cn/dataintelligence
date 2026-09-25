@@ -214,6 +214,12 @@ func piiColumn(column string) bool {
 	return n == "tel" || strings.HasSuffix(n, "_tel")
 }
 
+// PIIColumn is piiColumn for the intake plan, which classifies columns before
+// any model exists. One rule rather than two: a column the draft model masks
+// and the intake plan keeps — or the other way round — would be two answers to
+// "is this personal" given by one product.
+func PIIColumn(column string) bool { return piiColumn(column) }
+
 // maskExpr is what a masked dimension renders as. A literal, so the column never
 // reaches the result set at all.
 const maskExpr = `'***'`
