@@ -62,6 +62,10 @@ type Store struct {
 	db *cortexdb.DB
 	// borrowed marks a store whose brain belongs to somebody else.
 	borrowed bool
+	// emb is kept because the tagged-recall path in about.go embeds a metric
+	// name itself, and the store does not hand its embedder back. A store made
+	// by Wrap has none, so tagged recall is skipped there rather than guessed.
+	emb cortexdb.Embedder
 }
 
 // Open opens (or creates) the corpus at path.
@@ -80,7 +84,7 @@ func Open(path string, emb cortexdb.Embedder) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, emb: emb}, nil
 }
 
 // Wrap makes a corpus over a brain somebody else opened.
@@ -91,7 +95,17 @@ func Open(path string, emb cortexdb.Embedder) (*Store, error) {
 // SQLite file is a way to find out about locking at the worst moment. Such a
 // caller opens the brain once and wraps it, and closing it stays their job:
 // Wrap does not take ownership, so Close on the result is a no-op.
-func Wrap(db *cortexdb.DB) *Store { return &Store{db: db, borrowed: true} }
+func Wrap(db *cortexdb.DB, emb ...Embedder) *Store {
+	s := &Store{db: db, borrowed: true}
+	// The embedder is optional here only because the brain already has one.
+	// Passing it back is what lets tagged recall (about.go) run on a wrapped
+	// store: without it a document filed under a metric is found only when
+	// its words happen to match, which is the case filing exists to fix.
+	if len(emb) > 0 {
+		s.emb = emb[0]
+	}
+	return s
+}
 
 // Close releases the brain, unless it was borrowed through Wrap.
 func (s *Store) Close() error {
@@ -170,6 +184,15 @@ type Passage struct {
 	DocumentID string
 	Text       string
 	Score      float64
+
+	// Metric and Kind come from what the document was filed under, and Tagged
+	// says the passage was found because of that filing rather than because its
+	// words matched. A reader weighs a definition memo somebody attached to
+	// this metric differently from a paragraph that happened to mention it, and
+	// cannot do that unless told which one this is.
+	Metric string
+	Kind   string
+	Tagged bool
 }
 
 // Recall returns the passages that bear on a question, best first.
@@ -178,41 +201,5 @@ type Passage struct {
 // numbers have nothing written about them, and a store that manufactured a
 // citation for those would be worse than one that says nothing.
 func (s *Store) Recall(ctx context.Context, question string, k int) ([]Passage, error) {
-	if k <= 0 {
-		k = 4
-	}
-	// Retrieve wider than the caller wants to see. The relevance floor below
-	// removes passages that share no vocabulary with the question, and if the
-	// store is only asked for k candidates then a floor that rejects the first
-	// one returns nothing — asking for one passage found nothing where asking
-	// for two found the right one. A filter is supposed to raise precision, not
-	// to make recall depend on how many results somebody wanted printed.
-	candidates := k * 4
-	if candidates < 12 {
-		candidates = 12
-	}
-	res, err := s.db.SearchGraphRAG(ctx, question, cortexdb.GraphRAGQueryOptions{
-		Collection: Collection,
-		TopK:       candidates,
-		// One document rarely deserves every slot: a data dictionary that
-		// mentions revenue in eight places would otherwise crowd out the memo
-		// that explains why the definition changed.
-		PerDocumentLimit: 2,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("corpus: recall %q: %w", question, err)
-	}
-	out := make([]Passage, 0, len(res.Chunks))
-	for _, c := range res.Chunks {
-		// See relevance.go: top-k always returns k things, and a passage that
-		// shares no vocabulary with the question is not a citation.
-		if !bears(question, c.Content) {
-			continue
-		}
-		out = append(out, Passage{DocumentID: c.DocumentID, Text: trimmed(c.Content), Score: c.Score})
-		if len(out) == k {
-			break
-		}
-	}
-	return out, nil
+	return s.RecallAbout(ctx, About{Question: question}, k)
 }

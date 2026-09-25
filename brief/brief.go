@@ -64,6 +64,11 @@ type Brief struct {
 
 	// The corpus half.
 	Passages []corpus.Passage
+
+	// candidates are the metrics the grounder offered when it could not pick
+	// one. They are not an answer, but they are what the question is about, and
+	// the corpus uses them.
+	candidates []string
 }
 
 // Sources is what a brief was able to draw on: "warehouse", "corpus", both, or
@@ -112,13 +117,69 @@ func Answer(ctx context.Context, question string, o Options) (*Brief, error) {
 		b.NumbersBy = "no semantic model is loaded, so there is nothing to compute"
 	}
 	if o.Corpus != nil {
-		passages, err := o.Corpus.Recall(ctx, question, o.Passages)
+		// The corpus is asked about what the question resolved to, not only
+		// about how it was worded. See corpus/about.go: a definition memo filed
+		// under this metric is the answer even when it never repeats the
+		// asker's phrasing.
+		passages, err := o.Corpus.RecallAbout(ctx,
+			corpus.About{Question: question, Metrics: b.about(o)}, o.Passages)
 		if err != nil {
 			return nil, err
 		}
 		b.Passages = passages
 	}
 	return b, nil
+}
+
+// about is what the model knows about the metrics this question resolved to.
+//
+// It reads them off the model rather than off the query, because the query
+// carries names and the corpus needs vocabulary: the synonyms are there
+// precisely so that people can ask in their own words, and the description is
+// usually the definition itself.
+//
+// Metrics are resolved even when the figure failed. A question the grounder
+// could not turn into a query still names a metric often enough — "why does
+// revenue exclude refunds" grounds to nothing and is entirely about revenue —
+// and dropping the vocabulary there would make the corpus worst at exactly the
+// questions only the corpus can answer.
+func (b *Brief) about(o Options) []corpus.Metric {
+	if o.Engine == nil || o.Engine.Model == nil {
+		return nil
+	}
+	names := b.Metrics
+	if len(names) == 0 {
+		names = narrowed(b.candidates, o.Engine.Model.MetricNames())
+	}
+	out := make([]corpus.Metric, 0, len(names))
+	for _, name := range names {
+		m := o.Engine.Model.Metric(name)
+		if m == nil {
+			continue
+		}
+		out = append(out, corpus.Metric{Name: m.Name, Description: m.Description, Synonyms: m.Synonyms})
+	}
+	return out
+}
+
+// narrowed separates a clarification that is about the question from one that
+// is only a menu.
+//
+// The grounder answers "which measure did you mean" two ways. When a question
+// is genuinely ambiguous it offers the few metrics that could fit, and those
+// are what the question is about. When nothing matched at all it offers the
+// whole catalogue, and that is a menu — it says nothing about the question.
+//
+// Feeding a menu to the corpus as vocabulary brings back the same wrong
+// citation the relevance floor exists to prevent: asking about forklift
+// maintenance on a one-metric model offered `revenue`, and the revenue memo
+// came back as evidence. A candidate list that is the entire model is
+// therefore no list at all.
+func narrowed(candidates, all []string) []string {
+	if len(candidates) == 0 || len(candidates) >= len(all) {
+		return nil
+	}
+	return candidates
 }
 
 // numbers runs the governed path and records why it produced nothing when it
@@ -146,6 +207,7 @@ func (b *Brief) numbers(ctx context.Context, question string, o Options) {
 		// The candidate list is a menu, and a menu of everything is not one.
 		if n := len(clarify.Candidates); n > 0 && n <= 8 {
 			b.NumbersBy += " (" + strings.Join(clarify.Candidates, ", ") + ")"
+			b.candidates = clarify.Candidates
 		}
 		return
 	case len(q.Metrics) == 0:
@@ -217,7 +279,14 @@ func (b *Brief) Text() string {
 	if len(b.Passages) > 0 {
 		sb.WriteString("\nwritten about it:\n")
 		for _, p := range b.Passages {
-			fmt.Fprintf(&sb, "  [%s] %s\n", p.DocumentID, oneLine(p.Text, 240))
+			tag := ""
+			if p.Tagged {
+				// Say which citations are assertions rather than matches. A
+				// reader weighs "somebody filed this under 一次合格率_铸造"
+				// differently from "these words appeared together".
+				tag = " · filed under " + p.Metric
+			}
+			fmt.Fprintf(&sb, "  [%s%s] %s\n", p.DocumentID, tag, oneLine(p.Text, 240))
 		}
 	}
 	if len(b.Sources()) == 0 {

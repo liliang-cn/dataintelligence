@@ -271,3 +271,89 @@ func TestRecallNeverReturnsMoreThanAsked(t *testing.T) {
 		t.Errorf("asked for 2 passages, got %d", len(hits))
 	}
 }
+
+// A document filed under a metric is the answer to a question about that
+// metric, even when it never repeats the asker's words.
+func TestADocumentFiledUnderAMetricIsFoundWithoutMatchingTheWording(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	// The memo never contains the metric's name and never contains the words
+	// the asker used. Only the filing connects them.
+	if _, err := s.Add(ctx, Document{ID: "decision.md", Kind: "definition", Metric: "net_revenue",
+		Body: `# The 14th, agreed
+
+Money returned to a buyer was never money we earned. Booking it and then
+booking the return as a separate event flattered every cohort chart we shipped.
+From this quarter the headline figure is struck after returns.`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(ctx, Document{ID: "noise.md", Kind: "runbook",
+		Body: "# Shift handover\n\nEarly shift hands over at 06:00, night shift at 22:00."}); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := s.RecallAbout(ctx, About{
+		Question: "净额口径是怎么定的",
+		Metrics:  []Metric{{Name: "net_revenue", Description: "revenue net of refunds", Synonyms: []string{"净额收入"}}},
+	}, 3)
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("a document filed under the metric was not found")
+	}
+	if hits[0].DocumentID != "decision.md" {
+		t.Fatalf("top passage is %q, want the filed memo; got %+v", hits[0].DocumentID, hits)
+	}
+	if !hits[0].Tagged || hits[0].Metric != "net_revenue" {
+		t.Errorf("the citation does not say it was filed under the metric: %+v", hits[0])
+	}
+}
+
+// The filing beats the wording: a passage that merely mentions the words must
+// not outrank the document somebody attached to the metric.
+func TestAFiledDocumentOutranksOneThatMerelyMentionsTheWords(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if _, err := s.Add(ctx, Document{ID: "filed.md", Kind: "definition", Metric: "revenue",
+		Body: "# Agreed at the review\n\nThe headline figure is struck after returns."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(ctx, Document{ID: "chatter.md", Kind: "ticket",
+		Body: "# Ticket 881\n\nSomeone asked about revenue and refunds in the channel; revenue, refunds, revenue."}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := s.RecallAbout(ctx, About{
+		Question: "revenue refunds",
+		Metrics:  []Metric{{Name: "revenue", Description: "money booked net of refunds"}},
+	}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || hits[0].DocumentID != "filed.md" {
+		t.Fatalf("the filed document did not come first: %+v", hits)
+	}
+}
+
+// Metric vocabulary must reach the relevance floor as well as the query.
+// Enriching retrieval and then filtering on the bare question is a silent way
+// of doing nothing.
+func TestTheRelevanceFloorAcceptsTheMetricsOwnVocabulary(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if _, err := s.Add(ctx, Document{ID: "memo.md", Kind: "definition",
+		Body: "# 净额收入\n\n净额收入的口径是扣减退款之后的金额，这一条 2026 年起执行。"}); err != nil {
+		t.Fatal(err)
+	}
+	// The question shares no term with the document; the metric's synonym does.
+	hits, err := s.RecallAbout(ctx, About{
+		Question: "how is the headline number struck",
+		Metrics:  []Metric{{Name: "net_revenue", Synonyms: []string{"净额收入"}}},
+	}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("the metric's synonym found the passage and the floor threw it away")
+	}
+}

@@ -27,10 +27,20 @@ import "strings"
 // not evidence of anything; a shared two-character run is. Latin words of one
 // letter are dropped for the same reason.
 
-// bears reports whether a passage repeats any term from the question, and is
-// therefore worth showing as a citation.
-func bears(question, passage string) bool {
-	want := terms(question)
+// bearsAny reports whether a passage repeats any term from any of the sources
+// the caller is willing to match on — the question, and the vocabulary of
+// whatever metric the question resolved to.
+//
+// Both matter. Filtering on the question alone would discard the passages that
+// the metric's own synonyms found, which is the silent way to make query
+// enrichment do nothing.
+func bearsAny(sources []string, passage string) bool {
+	want := map[string]bool{}
+	for _, src := range sources {
+		for t := range terms(src) {
+			want[t] = true
+		}
+	}
 	if len(want) == 0 {
 		return true // nothing to match on; let the ranker decide
 	}
