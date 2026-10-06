@@ -81,3 +81,31 @@ server:
 # "then govern it" arrive together rather than one working and the other 403-ing.
 #
 # models_dir: /var/lib/di/models
+#
+# --- Copilot, consulting loop, identities ----------------------------------
+# See examples/smartfactory/config.yaml for a complete, annotated example.
+#
+# auth:
+#   users:                                  # static bearer tokens (small deployments, demos)
+#     - {name: alice, role: analyst,  token_env: DI_TOKEN_ALICE}
+#     - {name: bob,   role: approver, token_env: DI_TOKEN_BOB, attrs: {region: South}}
+#
+# copilot:
+#   principal: {user: copilot, role: analyst, attrs: {}}   # tools' identity for anonymous callers
+#   brief_file: brief.md                    # optional domain brief, beside this file
+#   checks: conflicts.yaml                  # optional; enables health_check
+#   mcp:                                    # external MCP servers (streamable HTTP, Bearer)
+#     - name: plant
+#       url: "${PLANT_MCP_URL}"
+#       token_env: PLANT_MCP_TOKEN
+#       tools: [list_sites]                 # read-only, callable by the agent as plant__list_sites
+#       actions: [send_command]             # only ever run as an adopted plan's action
+#
+# consult:
+#   store: consult.db                       # SQLite ledger, beside this file
+#   time_dimension: ""                      # default window dimension when a metric has several
+#   measure_as: {user: consult, role: analyst}
+#   adopt_roles: []                         # empty = any identified user other than the proposer
+#   check_every: 1h                         # how often due plans are accepted
+#   allow_as_of: false                      # replay history by anchoring on a past day
+#   disabled: false

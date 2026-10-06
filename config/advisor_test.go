@@ -89,3 +89,20 @@ func TestAdvisorSectionsAreStrict(t *testing.T) {
 		}
 	}
 }
+
+// The SmartFactory example is a file people copy; it must load under the
+// strict decoder.
+func TestTheSmartFactoryExampleLoads(t *testing.T) {
+	t.Setenv("DI_DSN", "postgres://u:p@localhost:5432/db")
+	t.Setenv("SF_MCP_URL", "http://localhost:43101/mcp")
+	c, err := Load("../examples/smartfactory/config.yaml")
+	if err != nil {
+		t.Fatalf("examples/smartfactory/config.yaml does not load: %v", err)
+	}
+	if c.Copilot.MCP[0].Name != "sf" || c.Consult.AdoptRoles[0] != "approver" || len(c.Auth.Users) != 2 {
+		t.Errorf("unexpected example: %+v", c)
+	}
+	if c.Path(c.Copilot.BriefFile) != filepath.Join("..", "examples", "smartfactory", "brief.md") {
+		t.Errorf("brief path = %s", c.Path(c.Copilot.BriefFile))
+	}
+}
