@@ -69,6 +69,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/rollout"
 	"github.com/liliang-cn/dataintelligence/runtime"
 	"github.com/liliang-cn/dataintelligence/runtime/ui"
+	"github.com/liliang-cn/dataintelligence/runtime/web"
 	"github.com/liliang-cn/dataintelligence/spiderbench"
 	"github.com/liliang-cn/dataintelligence/survey"
 	"github.com/liliang-cn/dataintelligence/warehouse"
@@ -332,9 +333,11 @@ func runServe(argv []string) {
 		}
 	}
 
-	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement, Users: adv.users, Consult: adv.consult}
+	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement, Users: adv.users, Consult: adv.consult,
+		Title: cfg.UI.Title, Copilot: adv.cop}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
+	web.Mount(mux)
 	consoleOpts := ui.Options{Copilot: adv.cop, Identify: v1.Principal, AuthMode: v1.AuthMode(), Consult: adv.consult != nil}
 	if eng == nil {
 		fmt.Fprintf(os.Stderr, "-- no database configured yet; the console and control-plane API are not mounted (register one: POST /v1/databases)\n")
@@ -352,7 +355,7 @@ func runServe(argv []string) {
 	errc := make(chan error, 2)
 	go func() { errc <- serveNamed("REST /v1", rest) }()
 	go func() { errc <- serveNamed("MCP", mcpSrv) }()
-	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/ui\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
+	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/  (older console: /ui)\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
 		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, strings.Join(mcpserver.ToolNames, "/"), authNote, cfg.Server.OTel)
 	fmt.Fprintf(os.Stderr, "  advisor: %s\n", adv.describe())
 	ids := reg.IDs()

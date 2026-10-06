@@ -95,8 +95,9 @@ agent/app → grounding (NL→semantic query) → semantic-go compiler (→ safe
 - **`copilot`** — an agent-go agent wrapping `agenttools`; `Run` and a streaming
   `Stream`. Used by `di copilot` and the web console.
 - **`runtime`** — the HTTP server: stable versioned `/v1` API (`v1.go`) + the
-  control-plane API + the embedded web console (`runtime/ui`, htmx/Alpine/GSAP/
-  Tailwind, all `go:embed`-ed; no Node build).
+  control-plane API + two embedded consoles: `runtime/web` (React + Tailwind v4 +
+  shadcn/ui, served at `/`; `make web` rebuilds its committed `dist/`, so `go build`
+  needs no Node) and the older engineer console `runtime/ui` (htmx, at `/ui`).
 - **`config`** — one `config.yaml` boots the `di serve` daemon (model/sources/
   warehouse/governance/auth, `${ENV}` expanded).
 - Supporting: `modelgen` (introspect → generate a model draft), `reconcile`
