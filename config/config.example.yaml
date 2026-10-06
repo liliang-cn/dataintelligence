@@ -31,6 +31,9 @@ server:
   mcp_addr: ":41910"
   otel: true
 
+ui:
+  title: ""                                # console product name; empty → the engagement name
+
 # --- Several governed databases from one process ---------------------------
 # A semantic model is scoped to one warehouse, so "which model" and "which
 # warehouse" are the same question. Declare as many as you have; the first is

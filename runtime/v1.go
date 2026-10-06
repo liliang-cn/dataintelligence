@@ -20,6 +20,7 @@ import (
 	"github.com/liliang-cn/dataintelligence/anchor"
 	"github.com/liliang-cn/dataintelligence/branch"
 	"github.com/liliang-cn/dataintelligence/consult"
+	"github.com/liliang-cn/dataintelligence/copilot"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
@@ -51,6 +52,12 @@ type V1 struct {
 	// serves, so one deployment can serve several without their trails becoming
 	// one another's.
 	Engagement string
+
+	// Title names the product in the web console; empty → Engagement.
+	Title string
+	// Copilot answers the console's chat (POST /v1/copilot/stream); nil
+	// disables it.
+	Copilot *copilot.Agent
 }
 
 // resolve picks the database this request is for (X-DI-Database, ?database=,
@@ -112,6 +119,7 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/branch/promote", v.branchPromoteV1)
 	mux.HandleFunc("POST /v1/branch/discard", v.branchDiscardV1)
 	v.mountConsult(mux)
+	v.mountConsole(mux)
 	return v.middleware(mux)
 }
 

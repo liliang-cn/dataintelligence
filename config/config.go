@@ -50,6 +50,14 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Governance Governance `yaml:"governance"`
 	Server     Server     `yaml:"server"`
+	UI         UI         `yaml:"ui"`
+}
+
+// UI configures the web console served at /.
+type UI struct {
+	// Title is the product name in the console's top bar and browser tab.
+	// Empty falls back to the engagement name.
+	Title string `yaml:"title"`
 }
 
 // Database is one governed database: a semantic model over a warehouse.

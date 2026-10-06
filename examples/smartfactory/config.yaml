@@ -12,7 +12,7 @@
 #   set -a; . examples/smartfactory/env.example; set +a   # then fill in real values
 #   go build -o /tmp/di ./cmd/di
 #   /tmp/di serve -config examples/smartfactory/config.yaml
-#   open http://localhost:41900/ui/consult
+#   open http://localhost:41900/
 #
 # Relative paths (model, brief_file, consult.store) resolve beside this file.
 
@@ -63,6 +63,10 @@ consult:
   # true lets adoption/acceptance be anchored on a past day to replay history
   # (recorded on every decision that uses it). Keep false in production.
   allow_as_of: false
+
+# The name in the console's top bar (served at /).
+ui:
+  title: 华锻经营顾问
 
 server:
   rest_addr: ":41900"
