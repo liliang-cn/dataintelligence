@@ -1,210 +1,267 @@
 {{template "head" .}}
-<div x-data="consultPage()" x-init="init()" class="space-y-4">
-  <div class="flex flex-wrap items-end gap-3">
-    <div class="mr-auto">
-      <h1 class="text-lg font-semibold">咨询闭环</h1>
-      <p class="text-sm text-muted">目标 → 调查 → 结论 → 计划 → 实施 → 验收。每个数字都是服务器执行语义查询得来的；采纳与验收只能由人在这里完成。</p>
-    </div>
-    <button @click="load()" class="text-xs px-3 py-1.5 rounded-lg ring-1 ring-line text-muted hover:text-accent">刷新</button>
-  </div>
+<style>
+  /* tints of the theme colours (Tailwind's /opacity modifiers cannot reach CSS-variable colours) */
+  .t-heat { background: color-mix(in srgb, var(--heat) 13%, transparent); }
+  .t-accent { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .t-good { background: color-mix(in srgb, var(--good) 13%, transparent); }
+  .t-bad { background: color-mix(in srgb, var(--bad) 13%, transparent); }
+  .r-heat { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--heat) 45%, transparent); }
+  .r-accent { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+  [x-cloak] { display: none !important; }
+</style>
+<div x-data="consultPage()" x-init="init()" x-cloak class="space-y-6">
 
-  <!-- identity -->
-  <div class="card bg-panel rounded-2xl ring-1 ring-line p-4 flex flex-wrap items-center gap-3 text-sm">
-    <span class="text-muted">当前身份</span>
-    <template x-if="me.user"><span><b x-text="me.user"></b> <span class="text-muted" x-text="'（' + me.role + '）'"></span></span></template>
-    <template x-if="!me.user"><span class="text-amber-400" x-text="me.error || '未识别'"></span></template>
-    <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted" x-text="'认证：' + authLabel()"></span>
-    <div class="ml-auto flex items-center gap-2">
-      <template x-if="auth === 'open'">
-        <input x-model="nameInput" placeholder="开发模式：输入你的名字" class="bg-ink ring-1 ring-line rounded-lg px-2 py-1 text-sm w-44">
+  <!-- page head: what this is, who is looking -->
+  <div class="flex flex-wrap items-end gap-x-6 gap-y-3 pt-2">
+    <div class="mr-auto min-w-0">
+      <h1 class="text-2xl font-semibold tracking-tight">咨询档案</h1>
+      <p class="mt-1 text-sm text-muted max-w-2xl">每个数字都来自服务器执行过的查询；计划只有在另一个人采纳后才会动现场，验收时重新量一次。</p>
+    </div>
+    <div class="relative flex items-center gap-2 text-sm" x-data="{open: false}">
+      <template x-if="me.user">
+        <span class="inline-flex items-center gap-2 rounded-full bg-panel ring-1 ring-line pl-1 pr-3 py-1">
+          <span class="grid size-7 place-items-center rounded-full t-accent text-accent font-semibold" x-text="me.user.slice(0, 1)"></span>
+          <b x-text="me.user"></b><span class="text-muted" x-text="roleText(me.role)"></span>
+        </span>
       </template>
-      <template x-if="auth !== 'open'">
-        <input x-model="tokenInput" type="password" placeholder="粘贴你的访问令牌" class="bg-ink ring-1 ring-line rounded-lg px-2 py-1 text-sm w-56">
-      </template>
-      <button @click="setIdentity()" class="text-xs px-3 py-1.5 rounded-lg bg-accent text-ink font-semibold">切换身份</button>
+      <template x-if="!me.user"><span class="text-heat">还没登录</span></template>
+      <button @click="open = !open" class="rounded-full px-3 py-1.5 ring-1 ring-line text-muted hover:text-txt">换人</button>
+      <div x-show="open" @click.outside="open = false" class="absolute right-0 top-full mt-2 z-20 w-80 rounded-2xl bg-panel ring-1 ring-line p-4 shadow-2xl space-y-3">
+        <div class="text-sm font-medium" x-text="auth === 'open' ? '开发模式：用名字登录' : '粘贴你的访问令牌'"></div>
+        <input x-show="auth === 'open'" x-model="nameInput" placeholder="你的名字" class="w-full bg-ink ring-1 ring-line rounded-lg px-3 py-2 text-sm">
+        <input x-show="auth !== 'open'" x-model="tokenInput" type="password" placeholder="令牌" class="w-full bg-ink ring-1 ring-line rounded-lg px-3 py-2 text-sm">
+        <button @click="setIdentity(); open = false" class="w-full rounded-lg bg-accent text-ink font-semibold py-2 text-sm">登录</button>
+      </div>
+      <button @click="load()" title="刷新" class="grid size-8 place-items-center rounded-full ring-1 ring-line text-muted hover:text-txt">↻</button>
     </div>
   </div>
 
   {{if not .Enabled}}
-  <div class="card bg-amber-950/30 ring-1 ring-amber-900/60 rounded-2xl p-5 text-amber-200 text-sm">
-    咨询闭环没有启用：默认数据库需要有语义模型（并且没有设置 <code>consult.disabled</code>）。
-  </div>
+  <div class="rounded-2xl ring-1 ring-line bg-panel p-5 text-sm text-heat">咨询闭环没有启用：默认数据库需要有语义模型（并且没有设置 consult.disabled）。</div>
   {{end}}
-
-  <template x-if="error">
-    <div class="card bg-rose-950/40 ring-1 ring-rose-800 rounded-2xl p-4 text-rose-300 text-sm" x-text="error"></div>
-  </template>
-  <template x-if="notice">
-    <div class="card bg-emerald-950/30 ring-1 ring-emerald-800 rounded-2xl p-4 text-emerald-300 text-sm whitespace-pre-wrap" x-text="notice"></div>
-  </template>
+  <template x-if="error"><div class="rounded-2xl t-bad p-4 text-sm text-bad" x-text="error"></div></template>
+  <template x-if="notice"><div class="rounded-2xl t-good p-4 text-sm text-good whitespace-pre-wrap" x-text="notice"></div></template>
 
   <template x-if="board && board.goals.length === 0">
-    <div class="card bg-panel rounded-2xl ring-1 ring-line p-5 text-sm text-muted">
-      还没有目标。到 <a href="/ui/copilot" class="text-accent">copilot</a> 里说一句你想达成什么，它会记下目标、调查、写下有证据的结论，并提出计划；或者调用 <code>POST /v1/consult/goals</code>。
+    <div class="rounded-2xl bg-panel ring-1 ring-line p-8 text-center">
+      <div class="text-lg font-medium">还没有咨询目标</div>
+      <p class="mt-2 text-sm text-muted">到「顾问对话」里说一句你想改善什么，顾问会调查、写下有证据的结论，并提出计划。</p>
+      <a href="/ui/copilot" class="mt-4 inline-block rounded-lg bg-accent text-ink font-semibold px-4 py-2 text-sm">去和顾问对话</a>
     </div>
   </template>
 
   <template x-for="gv in (board ? board.goals : [])" :key="gv.goal.id">
-    <section class="card bg-panel rounded-2xl ring-1 ring-line overflow-hidden">
-      <!-- goal -->
-      <div class="px-4 sm:px-5 py-4 border-b border-line space-y-2">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-xs font-mono px-2 py-0.5 rounded bg-line text-muted" x-text="gv.goal.id"></span>
-          <h2 class="font-semibold" x-text="gv.goal.what"></h2>
-          <span class="text-xs text-muted" x-show="gv.goal.author" x-text="'由 ' + gv.goal.author + (gv.goal.via ? '（经 ' + gv.goal.via + '）' : '') + ' 记于 ' + day(gv.goal.at)"></span>
-        </div>
-        <div class="flex flex-wrap gap-2 text-xs">
-          <span x-show="gv.goal.metric" class="px-2 py-0.5 rounded-full ring-1 ring-accent/30 text-accent" x-text="gv.goal.metric + ' ' + dir(gv.goal.direction) + pct(gv.goal.by) + '，' + gv.goal.within_days + ' 天内'"></span>
-          <template x-for="f in (gv.goal.scope || [])"><span class="px-2 py-0.5 rounded-full bg-line" x-text="filterText(f)"></span></template>
-          <template x-for="g in (gv.goal.guards || [])"><span class="px-2 py-0.5 rounded-full ring-1 ring-amber-700/50 text-amber-400" x-text="'护栏 ' + guardText(g)"></span></template>
-        </div>
-        <div class="text-sm" x-show="gv.goal.baseline">
-          基线 <b x-text="num(gv.goal.baseline && gv.goal.baseline.value)"></b>
-          <span class="text-muted text-xs" x-text="windowText(gv.goal.baseline)"></span>
-          → 达标线 <b x-text="num(gv.target)"></b>
-        </div>
-      </div>
+    <article class="card rounded-3xl bg-panel ring-1 ring-line overflow-hidden">
 
-      <!-- findings -->
-      <div class="px-4 sm:px-5 py-3 border-b border-line space-y-2">
-        <div class="text-xs uppercase tracking-wide text-muted">结论（每条都绑着服务器执行过的查询）</div>
-        <template x-if="gv.findings.length === 0"><div class="text-sm text-muted">还没有结论。</div></template>
-        <template x-for="f in gv.findings" :key="f.id">
-          <div class="text-sm">
-            <div><span class="font-mono text-xs text-muted" x-text="f.id"></span> <span x-text="f.says"></span>
-              <span class="text-xs text-muted" x-text="'— ' + f.by + (f.via ? '（经 ' + f.via + '）' : '')"></span></div>
-            <template x-for="(e, i) in f.evidence">
-              <details class="ml-4 mt-1">
-                <summary class="cursor-pointer text-xs text-muted hover:text-accent" x-text="'证据 ' + (i+1) + '：' + e.asked + ' · ' + e.row_count + ' 行' + (e.value != null ? ' · 值 ' + num(e.value) : '') + ' · ' + day(e.at)"></summary>
-                <pre class="mt-1 text-[11px] bg-ink ring-1 ring-line rounded-lg p-2 overflow-x-auto" x-text="e.sql"></pre>
-                <div class="overflow-x-auto mt-1" x-show="e.rows && e.rows.length">
-                  <table class="text-[11px]">
-                    <thead><tr><template x-for="c in e.columns"><th class="text-left pr-3 text-muted" x-text="c"></th></template></tr></thead>
-                    <tbody><template x-for="row in e.rows.slice(0, 20)"><tr><template x-for="cell in row"><td class="pr-3" x-text="cell"></td></template></tr></template></tbody>
-                  </table>
-                  <div class="text-[11px] text-muted" x-show="e.rows.length > 20 || e.truncated" x-text="'（只显示前 20 行，共 ' + e.row_count + ' 行）'"></div>
-                </div>
-              </details>
-            </template>
-          </div>
+      <!-- the six stages: where this engagement stands -->
+      <ol class="grid grid-cols-6 border-b border-line text-xs">
+        <template x-for="(s, i) in stages(gv)" :key="s.name">
+          <li class="relative px-2 sm:px-4 py-3 text-center sm:text-left" :class="s.now ? 't-heat' : ''">
+            <div class="h-1 rounded-full mb-2" :style="'background:' + (s.done ? 'var(--heat)' : 'var(--line)')"></div>
+            <span class="num mr-1" :class="s.done || s.now ? 'text-heat' : 'text-muted'" x-text="i + 1"></span>
+            <span :class="s.now ? 'text-txt font-semibold' : (s.done ? 'text-txt' : 'text-muted')" x-text="s.name"></span>
+            <div class="hidden sm:block text-[11px] text-muted mt-0.5 truncate" x-text="s.note"></div>
+          </li>
         </template>
-      </div>
+      </ol>
 
-      <!-- plans -->
-      <div class="px-4 sm:px-5 py-3 space-y-3">
-        <div class="text-xs uppercase tracking-wide text-muted">计划</div>
-        <template x-if="gv.plans.length === 0"><div class="text-sm text-muted">还没有计划。</div></template>
-        <template x-for="pv in gv.plans" :key="pv.plan.id">
-          <div class="rounded-xl ring-1 ring-line p-3 space-y-2" x-data="{why: '', asOf: ''}">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="font-mono text-xs px-2 py-0.5 rounded bg-line text-muted" x-text="pv.plan.id"></span>
-              <span class="text-xs px-2 py-0.5 rounded-full" :class="stateClass(pv)" x-text="stateText(pv)"></span>
-              <span class="font-medium text-sm" x-text="pv.plan.does"></span>
-            </div>
-            <div class="text-xs text-muted" x-text="'提出：' + pv.plan.by + (pv.plan.via ? '（经 ' + pv.plan.via + '）' : '') + ' · ' + day(pv.plan.at) + ' · 依据结论 ' + pv.plan.findings.join('、') + (pv.plan.cost ? ' · 成本：' + pv.plan.cost : '')"></div>
-            <div class="flex flex-wrap gap-2 text-xs">
-              <span class="px-2 py-0.5 rounded-full ring-1 ring-accent/30 text-accent" x-text="'预期 ' + pv.plan.expect.metric + ' ' + dir(pv.plan.expect.direction) + pct(pv.plan.expect.by) + '，窗口 ' + pv.plan.expect.within_days + ' 天'"></span>
-              <template x-for="f in (pv.plan.expect.scope || [])"><span class="px-2 py-0.5 rounded-full bg-line" x-text="filterText(f)"></span></template>
-              <template x-for="g in (pv.plan.guards || [])"><span class="px-2 py-0.5 rounded-full ring-1 ring-amber-700/50 text-amber-400" x-text="'护栏 ' + guardText(g)"></span></template>
-            </div>
-            <div class="text-xs text-amber-400" x-show="pv.plan.note" x-text="pv.plan.note"></div>
-            <template x-if="(pv.plan.actions || []).length">
-              <div class="text-xs">
-                <div class="text-muted">采纳后要执行的动作：</div>
-                <template x-for="a in pv.plan.actions"><div class="ml-3 font-mono" x-text="a.server + '/' + a.tool + ' ' + JSON.stringify(a.args || {}) + (a.why ? ' — ' + a.why : '')"></div></template>
+      <!-- goal: the number this is all about -->
+      <header class="px-5 sm:px-8 pt-6 pb-7 grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div class="min-w-0">
+          <div class="text-xs text-muted">
+            <span x-text="'目标 ' + gv.goal.id"></span>
+            <span x-show="gv.goal.author" x-text="' · ' + gv.goal.author + (gv.goal.via ? '（经顾问对话）' : '') + ' · ' + day(gv.goal.at)"></span>
+          </div>
+          <h2 class="mt-1 text-xl sm:text-2xl font-semibold leading-snug" x-text="gv.goal.what"></h2>
+          <div class="mt-3 flex flex-wrap gap-2 text-xs">
+            <template x-for="f in (gv.goal.scope || [])"><span class="rounded-full bg-ink ring-1 ring-line px-2.5 py-1" :title="f.dimension" x-text="scopeText(f)"></span></template>
+            <template x-for="g in (gv.goal.guards || [])"><span class="rounded-full r-heat text-heat px-2.5 py-1" x-text="guardText(g)"></span></template>
+          </div>
+        </div>
+        <div class="flex items-end gap-4 sm:gap-6" x-show="gv.goal.metric">
+          <div>
+            <div class="text-xs text-muted" x-text="label(gv.goal.metric) + ' · 基线'"></div>
+            <div class="num text-4xl sm:text-5xl font-semibold leading-none mt-1" x-text="fmt(gv.goal.metric, gv.goal.baseline && gv.goal.baseline.value)"></div>
+            <div class="text-[11px] text-muted mt-1.5" x-text="windowText(gv.goal.baseline)"></div>
+          </div>
+          <div class="pb-6 text-2xl text-muted">→</div>
+          <div>
+            <div class="text-xs text-heat" x-text="(gv.goal.direction === 'down' ? '降 ' : '升 ') + pct(gv.goal.by) + ' · ' + gv.goal.within_days + ' 天内'"></div>
+            <div class="num text-4xl sm:text-5xl font-semibold leading-none mt-1 text-heat" x-text="fmt(gv.goal.metric, gv.target)"></div>
+            <div class="text-[11px] text-muted mt-1.5">达标线</div>
+          </div>
+        </div>
+      </header>
+
+      <!-- findings: numbered because plans cite them by number -->
+      <section class="px-5 sm:px-8 py-6 border-t border-line">
+        <h3 class="text-sm font-semibold">结论 <span class="ml-1 font-normal text-muted" x-text="gv.findings.length ? gv.findings.length + ' 条，每条都绑着执行过的查询' : ''"></span></h3>
+        <template x-if="gv.findings.length === 0"><p class="mt-3 text-sm text-muted">还没有结论。</p></template>
+        <div class="mt-4 grid gap-3 md:grid-cols-2">
+          <template x-for="f in gv.findings" :key="f.id">
+            <div class="rounded-2xl bg-ink ring-1 ring-line p-4 flex flex-col" x-data="{open: -1}">
+              <div class="flex gap-3">
+                <span class="num shrink-0 grid size-7 place-items-center rounded-lg t-accent text-accent text-sm font-semibold" x-text="f.id"></span>
+                <p class="text-sm leading-relaxed" x-text="f.says"></p>
               </div>
-            </template>
+              <div class="mt-3 flex flex-wrap gap-1.5 pl-10">
+                <template x-for="(e, i) in f.evidence">
+                  <button @click="open = open === i ? -1 : i" class="rounded-full px-2.5 py-1 text-[11px] ring-1 ring-line hover:text-txt"
+                    :class="open === i ? 'text-accent r-accent' : 'text-muted'" x-text="'证据 ' + (i + 1) + ' · ' + e.row_count + ' 行'"></button>
+                </template>
+              </div>
+              <template x-for="(e, i) in f.evidence">
+                <div x-show="open === i" class="mt-3 pl-10 space-y-2">
+                  <div class="text-xs text-muted" x-text="e.asked"></div>
+                  <div class="overflow-x-auto rounded-lg ring-1 ring-line" x-show="e.rows && e.rows.length">
+                    <table class="w-full text-xs">
+                      <thead class="bg-panel"><tr><template x-for="c in e.columns"><th class="text-left font-medium text-muted px-2.5 py-1.5 whitespace-nowrap" x-text="label(c)"></th></template></tr></thead>
+                      <tbody><template x-for="row in e.rows.slice(0, 12)"><tr class="border-t border-line"><template x-for="(cell, ci) in row"><td class="px-2.5 py-1.5 whitespace-nowrap" :class="typeof cell === 'number' ? 'num text-right' : ''" x-text="cellText(e.columns[ci], cell)"></td></template></tr></template></tbody>
+                    </table>
+                  </div>
+                  <div class="text-[11px] text-muted" x-show="e.row_count > 12" x-text="'只显示前 12 行，共 ' + e.row_count + ' 行'"></div>
+                  <details><summary class="cursor-pointer text-[11px] text-muted hover:text-accent">查看 SQL</summary><pre class="mt-1 text-[11px] bg-panel ring-1 ring-line rounded-lg p-2.5 overflow-x-auto" x-text="e.sql"></pre></details>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </section>
 
-            <!-- decision -->
-            <template x-if="pv.decision">
-              <div class="text-sm border-t border-line pt-2">
-                <span x-text="(pv.decision.verdict === 'adopted' ? '已采纳' : '已否决') + '：' + pv.decision.who + ' · ' + day(pv.decision.at) + (pv.decision.why ? ' · ' + pv.decision.why : '')"></span>
-                <span class="text-xs text-amber-400" x-show="pv.decision.as_of_forced" x-text="'（窗口锚定日由操作者指定为 ' + pv.decision.as_of + '）'"></span>
-                <template x-if="pv.decision.baseline">
-                  <div>基线（采纳时量、已钉住） <b x-text="num(pv.decision.baseline.value)"></b>
-                    <span class="text-xs text-muted" x-text="windowText(pv.decision.baseline)"></span>
-                    <span x-show="pv.due" class="text-xs text-muted" x-text="' · 到期 ' + pv.due"></span>
-                    <details class="inline-block"><summary class="cursor-pointer text-xs text-muted hover:text-accent">SQL</summary><pre class="text-[11px] bg-ink ring-1 ring-line rounded-lg p-2 overflow-x-auto" x-text="pv.decision.baseline.sql"></pre></details>
+      <!-- plans: proposal → adoption → actions → acceptance -->
+      <section class="px-5 sm:px-8 py-6 border-t border-line space-y-4">
+        <h3 class="text-sm font-semibold">计划</h3>
+        <template x-if="gv.plans.length === 0"><p class="text-sm text-muted">还没有计划。</p></template>
+        <template x-for="pv in gv.plans" :key="pv.plan.id">
+          <div class="rounded-2xl bg-ink ring-1 ring-line overflow-hidden" x-data="{why: '', asOf: ''}">
+            <div class="p-5 grid gap-5 lg:grid-cols-[1fr_17rem]">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="num text-xs text-muted" x-text="'计划 ' + pv.plan.id"></span>
+                  <span class="rounded-full px-2.5 py-0.5 text-xs font-medium" :class="stateClass(pv)" x-text="stateText(pv)"></span>
+                </div>
+                <p class="mt-2 text-base font-medium leading-relaxed" x-text="pv.plan.does"></p>
+                <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span class="rounded-full t-accent text-accent px-2.5 py-1" x-text="'预期 ' + label(pv.plan.expect.metric) + (pv.plan.expect.direction === 'down' ? '降 ' : '升 ') + pct(pv.plan.expect.by) + '，' + pv.plan.expect.within_days + ' 天后验收'"></span>
+                  <template x-for="g in (pv.plan.guards || [])"><span class="rounded-full r-heat text-heat px-2.5 py-1" x-text="guardText(g)"></span></template>
+                  <span class="rounded-full ring-1 ring-line text-muted px-2.5 py-1" x-text="'依据 ' + pv.plan.findings.join('、')"></span>
+                </div>
+                <p class="mt-3 text-xs text-muted leading-relaxed" x-show="pv.plan.cost" x-text="'代价：' + pv.plan.cost"></p>
+                <p class="mt-1 text-xs text-heat" x-show="pv.plan.note" x-text="pv.plan.note"></p>
+
+                <!-- what it will do on site -->
+                <template x-if="(pv.plan.actions || []).length">
+                  <div class="mt-4">
+                    <div class="text-xs text-muted mb-2" x-text="pv.decision ? '下发到现场的动作' : '采纳后会下发到现场'"></div>
+                    <ol class="space-y-2">
+                      <template x-for="(a, i) in pv.plan.actions">
+                        <li class="flex gap-3 text-sm">
+                          <span class="num shrink-0 grid size-6 place-items-center rounded-full text-[11px]"
+                            :class="runOf(pv, i) ? (runOf(pv, i).error ? 't-bad text-bad' : 't-good text-good') : 'ring-1 ring-line text-muted'"
+                            x-text="runOf(pv, i) ? (runOf(pv, i).error ? '!' : '✓') : (i + 1)"></span>
+                          <div class="min-w-0">
+                            <div x-text="a.why || (a.tool + ' ' + JSON.stringify(a.args || {}))"></div>
+                            <div class="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
+                              <span class="rounded bg-panel ring-1 ring-line px-1.5 py-0.5" x-text="a.server + ' · ' + a.tool"></span>
+                              <template x-for="kv in Object.entries(a.args || {})"><span class="rounded bg-panel ring-1 ring-line px-1.5 py-0.5" x-text="kv[0] + ' ' + kv[1]"></span></template>
+                            </div>
+                            <div class="mt-1 text-[11px]" x-show="runOf(pv, i)" :class="runOf(pv, i) && runOf(pv, i).error ? 'text-bad' : 'text-good'" x-text="runText(runOf(pv, i))"></div>
+                          </div>
+                        </li>
+                      </template>
+                    </ol>
                   </div>
                 </template>
-                <template x-for="g in (pv.decision.guard_baselines || [])">
-                  <div class="text-xs text-muted" x-text="'护栏基线 ' + g.metric + ' = ' + num(g.value)"></div>
-                </template>
               </div>
-            </template>
 
-            <!-- action runs -->
-            <template x-if="(pv.actions || []).length">
-              <div class="text-xs border-t border-line pt-2 space-y-1">
-                <div class="text-muted">已执行的动作：</div>
-                <template x-for="r in pv.actions">
-                  <details>
-                    <summary class="cursor-pointer" :class="r.error ? 'text-rose-400' : 'text-emerald-400'"
-                      x-text="'#' + r.index + ' ' + r.server + '/' + r.tool + ' · ' + (r.skipped ? '未执行' : (r.error ? '失败' : '成功')) + ' · ' + r.ms + 'ms'"></summary>
-                    <pre class="text-[11px] bg-ink ring-1 ring-line rounded-lg p-2 overflow-x-auto" x-text="'参数 ' + JSON.stringify(r.args || {}, null, 2) + '\n' + (r.error ? '错误 ' + r.error + '\n' : '') + (r.result ? '结果 ' + r.result : '')"></pre>
-                  </details>
-                </template>
-              </div>
-            </template>
+              <!-- the record: who proposed, who decided, when it is judged -->
+              <ol class="relative space-y-4 text-sm lg:border-l lg:border-line lg:pl-5">
+                <li>
+                  <div class="text-xs text-muted">提出</div>
+                  <div x-text="pv.plan.by + (pv.plan.via ? '（经顾问对话）' : '') + ' · ' + day(pv.plan.at)"></div>
+                </li>
+                <li>
+                  <div class="text-xs text-muted">采纳</div>
+                  <template x-if="pv.decision">
+                    <div>
+                      <div><b x-text="pv.decision.who"></b> <span x-text="(pv.decision.verdict === 'adopted' ? '采纳' : '否决') + ' · ' + day(pv.decision.at)"></span></div>
+                      <p class="mt-1 text-xs text-muted leading-relaxed" x-show="pv.decision.why" x-text="'「' + pv.decision.why + '」'"></p>
+                      <template x-if="pv.decision.baseline">
+                        <div class="mt-2 text-xs">
+                          <span class="text-muted">钉住的基线 </span><b class="num" x-text="fmt(pv.decision.baseline.metric, pv.decision.baseline.value)"></b>
+                          <template x-for="g in (pv.decision.guard_baselines || [])"><div class="text-muted" x-text="label(g.metric) + ' ' + fmt(g.metric, g.value)"></div></template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="!pv.decision"><div class="text-muted">等另一个人决定</div></template>
+                </li>
+                <li>
+                  <div class="text-xs text-muted">验收</div>
+                  <template x-if="pv.acceptance">
+                    <div>
+                      <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold" :class="outcomeClass(pv.acceptance.outcome)" x-text="outcomeText(pv.acceptance.outcome)"></span>
+                      <p class="mt-1 text-xs leading-relaxed" x-text="pv.acceptance.says"></p>
+                      <template x-for="g in (pv.acceptance.guards || [])">
+                        <div class="text-xs" :class="g.broken ? 'text-bad' : 'text-muted'" x-text="label(g.guard.metric) + (g.broken ? ' 破了' : ' 守住') + '：' + fmt(g.guard.metric, g.baseline) + ' → ' + fmt(g.guard.metric, g.measured && g.measured.value)"></div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="!pv.acceptance && pv.due">
+                    <div>
+                      <div><span class="num text-2xl font-semibold" x-text="daysLeft(pv.due)"></span> <span class="text-muted text-xs" x-text="'天后 · ' + pv.due"></span></div>
+                      <p class="mt-1 text-xs text-muted" x-show="pv.progress" x-text="pv.progress && ('进度：' + pv.progress.says)"></p>
+                    </div>
+                  </template>
+                  <template x-if="!pv.acceptance && !pv.due"><div class="text-muted">采纳后开始计时</div></template>
+                </li>
+              </ol>
+            </div>
 
-            <!-- progress / acceptance -->
-            <template x-if="pv.progress && !pv.acceptance">
-              <div class="text-sm border-t border-line pt-2">
-                <span class="text-xs px-2 py-0.5 rounded-full bg-line text-muted">进度（不是结论）</span>
-                <span x-text="pv.progress.says"></span>
-                <span class="text-xs text-muted" x-text="'· 量于 ' + day(pv.progress.at)"></span>
-              </div>
-            </template>
-            <template x-if="pv.acceptance">
-              <div class="text-sm border-t border-line pt-2 space-y-1">
-                <span class="text-xs px-2 py-0.5 rounded-full font-semibold" :class="outcomeClass(pv.acceptance.outcome)" x-text="outcomeText(pv.acceptance.outcome)"></span>
-                <span x-text="pv.acceptance.says"></span>
-                <div class="text-xs text-muted" x-text="'验收于 ' + day(pv.acceptance.at) + '，触发者 ' + (pv.acceptance.by || 'system') + ' · ' + windowText(pv.acceptance.measured)"></div>
-                <template x-for="g in (pv.acceptance.guards || [])">
-                  <div class="text-xs" :class="g.broken ? 'text-rose-400' : 'text-muted'" x-text="'护栏 ' + g.guard.metric + '：' + (g.broken ? '破了 · ' + g.why : '守住') + '（' + num(g.baseline) + ' → ' + num(g.measured && g.measured.value) + '）'"></div>
-                </template>
-              </div>
-            </template>
-
-            <!-- buttons -->
-            <div class="flex flex-wrap items-center gap-2 pt-1">
+            <!-- decisions are made here, by a person -->
+            <div class="border-t border-line px-5 py-3 flex flex-wrap items-center gap-2" x-show="pv.state === 'proposed' || pv.state === 'adopted'">
               <template x-if="pv.state === 'proposed'">
                 <div class="flex flex-wrap items-center gap-2 w-full">
-                  <input x-model="why" placeholder="理由（否决时必填）" class="bg-ink ring-1 ring-line rounded-lg px-2 py-1 text-sm flex-1 min-w-40">
-                  <input x-model="asOf" placeholder="锚定日 YYYY-MM-DD（仅回放）" class="bg-ink ring-1 ring-line rounded-lg px-2 py-1 text-xs w-48">
-                  <button @click="act(pv.plan.id, 'adopt', {why: why, as_of: asOf})" class="text-xs px-3 py-1.5 rounded-lg bg-accent text-ink font-semibold">采纳</button>
-                  <button @click="act(pv.plan.id, 'reject', {why: why})" class="text-xs px-3 py-1.5 rounded-lg ring-1 ring-rose-700 text-rose-400">否决</button>
+                  <input x-model="why" placeholder="写一句理由（否决时必填）" class="bg-panel ring-1 ring-line rounded-lg px-3 py-2 text-sm flex-1 min-w-48">
+                  <input x-show="false" x-model="asOf">
+                  <button @click="act(pv.plan.id, 'adopt', {why: why, as_of: asOf})" class="rounded-lg bg-accent text-ink font-semibold px-4 py-2 text-sm">采纳并下发</button>
+                  <button @click="act(pv.plan.id, 'reject', {why: why})" class="rounded-lg ring-1 ring-line text-bad px-4 py-2 text-sm">否决</button>
                 </div>
               </template>
               <template x-if="pv.state === 'adopted'">
-                <div class="flex flex-wrap gap-2">
-                  <button @click="act(pv.plan.id, 'measure', {})" class="text-xs px-3 py-1.5 rounded-lg ring-1 ring-line hover:text-accent">测一下进度</button>
-                  <button @click="act(pv.plan.id, 'accept', {})" class="text-xs px-3 py-1.5 rounded-lg bg-accent text-ink font-semibold">验收</button>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button @click="act(pv.plan.id, 'measure', {})" class="rounded-lg ring-1 ring-line px-4 py-2 text-sm hover:text-accent">量一下进度</button>
+                  <button @click="act(pv.plan.id, 'accept', {})" class="rounded-lg ring-1 ring-line px-4 py-2 text-sm text-muted hover:text-txt" title="窗口未到时验收，结论按已有数据给出">提前验收</button>
                 </div>
               </template>
             </div>
           </div>
         </template>
-      </div>
-    </section>
+      </section>
+    </article>
   </template>
 </div>
 
 <script>
 function consultPage(){
   return {
-    board: null, me: {}, auth: '{{.AuthMode}}', error: '', notice: '', tokenInput: '', nameInput: '',
-    async init(){ await this.whoami(); await this.load(); },
+    board: null, me: {}, auth: '{{.AuthMode}}', error: '', notice: '', tokenInput: '', nameInput: '', meta: {},
+    async init(){ await this.whoami(); await Promise.all([this.loadMeta(), this.load()]); },
     async whoami(){
       try { const r = await fetch('/v1/whoami'); const j = await r.json();
         this.me = r.ok ? j : {error: j.error}; if (j.auth) this.auth = j.auth; } catch(e){ this.me = {error: String(e)}; }
+    },
+    // metric names in the model's own words: the first synonym written in Chinese, if any
+    async loadMeta(){
+      try { const r = await fetch('/v1/metrics'); if (!r.ok) return; const j = await r.json();
+        const m = {}; for (const x of (j.metrics || [])) m[x.name] = x; this.meta = m; } catch(e){}
     },
     async load(){
       this.error = '';
       try { const r = await fetch('/v1/consult'); const j = await r.json();
         if (!r.ok) { this.error = j.error || ('HTTP ' + r.status); return; }
         if ((j.loose_findings || []).length || (j.loose_plans || []).length) {
-          j.goals.push({goal: {id: '—', what: '未关联目标的结论与计划', scope: [], guards: []}, findings: j.loose_findings || [], plans: j.loose_plans || []});
+          j.goals.push({goal: {id: '—', what: '没有归到目标下的结论与计划', scope: [], guards: []}, findings: j.loose_findings || [], plans: j.loose_plans || []});
         }
         this.board = j; } catch(e){ this.error = String(e); }
     },
@@ -213,10 +270,10 @@ function consultPage(){
       const clean = {}; for (const k in body) if (body[k]) clean[k] = body[k];
       const r = await fetch('/v1/consult/plans/' + id + '/' + verb, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(clean)});
       const j = await r.json();
-      if (!r.ok) { this.error = (j.rule ? '[' + j.rule + '] ' : '') + (j.error || ('HTTP ' + r.status)); return; }
+      if (!r.ok) { this.error = j.error || ('HTTP ' + r.status); return; }
       if (verb === 'adopt') {
         const runs = j.actions || [];
-        this.notice = '已采纳 ' + id + '。基线 ' + this.num(j.decision.baseline.value) + ' 已钉住。' + (runs.length ? '\n执行了 ' + runs.length + ' 个动作：' + runs.map(a => a.tool + (a.error ? '（失败）' : '（成功）')).join('、') : '');
+        this.notice = '已采纳计划 ' + id + '，基线 ' + this.fmt(j.decision.baseline.metric, j.decision.baseline.value) + ' 已钉住。' + (runs.length ? ' 下发了 ' + runs.length + ' 个动作，' + runs.filter(a => !a.error).length + ' 个成功。' : '');
       } else if (j.says) { this.notice = j.says; }
       await this.load();
     },
@@ -226,19 +283,54 @@ function consultPage(){
       else document.cookie = 'di_token=' + encodeURIComponent(this.tokenInput.trim()) + opts;
       this.tokenInput = ''; this.whoami().then(() => this.load());
     },
-    authLabel(){ return {users: '令牌', oidc: 'OIDC', 'users+oidc': '令牌 / OIDC', open: '开发模式（无认证）'}[this.auth] || this.auth; },
-    // small values (rates, shares) keep four significant digits: 0.01339 must not read as 0.01
+    stages(gv){
+      const plans = gv.plans || [];
+      const ev = (gv.findings || []).reduce((n, f) => n + (f.evidence || []).length, 0);
+      const adopted = plans.filter(p => p.decision && p.decision.verdict === 'adopted');
+      const accepted = plans.filter(p => p.acceptance);
+      const s = [
+        {name: '目标', done: !!gv.goal.metric, note: gv.goal.metric ? this.label(gv.goal.metric) : ''},
+        {name: '调查', done: ev > 0, note: ev ? ev + ' 次查询' : ''},
+        {name: '结论', done: (gv.findings || []).length > 0, note: (gv.findings || []).length ? gv.findings.length + ' 条' : ''},
+        {name: '计划', done: plans.length > 0, note: plans.length ? plans.length + ' 个' : ''},
+        {name: '实施', done: adopted.length > 0, note: adopted.length ? '已采纳 ' + adopted.length : ''},
+        {name: '验收', done: accepted.length > 0, note: accepted.length ? this.outcomeText(accepted[0].acceptance.outcome) : (adopted[0] && adopted[0].due ? adopted[0].due + ' 到期' : '')},
+      ];
+      const i = s.findIndex(x => !x.done);
+      if (i >= 0) s[i].now = true;
+      return s;
+    },
+    label(name){
+      const m = this.meta[name];
+      const zh = m && (m.synonyms || []).find(x => /[一-鿿]/.test(x));
+      return zh || name;
+    },
+    // a share (rate, yield, availability …) reads as a percentage
+    isShare(name){
+      const m = this.meta[name];
+      return /(rate|yield|ratio|share|availability|performance|oee|_pct)$/i.test(name || '') || (m && m.additivity === 'non_additive' && /率/.test(this.label(name)));
+    },
+    fmt(name, v){
+      if (v === null || v === undefined) return '无数据';
+      const x = Number(v);
+      if (this.isShare(name) && Math.abs(x) <= 1.5) { const d = Math.abs(x) < 0.1 ? 2 : 1; return (x * 100).toLocaleString('zh-CN', {minimumFractionDigits: d, maximumFractionDigits: d}) + '%'; }
+      return this.num(x);
+    },
     num(v){ if (v === null || v === undefined) return '无数据'; const x = Number(v); return Math.abs(x) < 1 && x !== 0 ? x.toLocaleString('zh-CN', {maximumSignificantDigits: 4}) : x.toLocaleString('zh-CN', {maximumFractionDigits: 2}); },
-    pct(v){ return ' ' + Math.round(v * 1000) / 10 + '%'; },
-    dir(d){ return d === 'down' ? '下降' : '上升'; },
+    cellText(col, v){ if (typeof v !== 'number') return v === null || v === undefined ? '—' : String(v).replace(/T00:00:00Z?$/, ''); return this.fmt(col, v); },
+    pct(v){ return Math.round(v * 1000) / 10 + '%'; },
     day(t){ return t ? String(t).slice(0, 10) : ''; },
-    windowText(m){ return m ? '（' + m.metric + '，' + m.from + ' ~ ' + m.to + '，' + (m.data_days || 0) + ' 天有数据）' : ''; },
-    filterText(f){ if (f.and || f.or) return JSON.stringify(f); return f.dimension + ' ' + f.op + ' ' + (f.values || []).join(', '); },
-    guardText(g){ return g.metric + (g.worse_is === 'up' ? ' 不许升' : ' 不许降') + (g.tolerance != null ? '超过 ' + Math.round(g.tolerance * 1000) / 10 + '%' : '') + (g.limit != null ? '（界限 ' + this.num(g.limit) + '）' : ''); },
-    stateText(pv){ return {proposed: '待采纳', adopted: '已采纳 · 实施中', rejected: '已否决', accepted: '已验收'}[pv.state] || pv.state; },
-    stateClass(pv){ return {proposed: 'bg-amber-500/15 text-amber-400', adopted: 'bg-accent/15 text-accent', rejected: 'bg-line text-muted', accepted: 'bg-emerald-500/15 text-emerald-400'}[pv.state]; },
+    daysLeft(d){ return Math.max(0, Math.ceil((new Date(d + 'T00:00:00') - new Date()) / 86400000)); },
+    windowText(m){ return m ? m.from + ' 至 ' + m.to + (m.data_days ? '，' + m.data_days + ' 天有数据' : '') : ''; },
+    scopeText(f){ if (f.and || f.or) return JSON.stringify(f); const v = (f.values || []).join('、'); return f.op === '=' || f.op === 'in' ? v : f.dimension + ' ' + f.op + ' ' + v; },
+    guardText(g){ return '护栏：' + this.label(g.metric) + (g.worse_is === 'up' ? '升' : '降') + (g.tolerance != null ? '不超过 ' + this.pct(g.tolerance) : '') + (g.limit != null ? '（界限 ' + this.fmt(g.metric, g.limit) + '）' : ''); },
+    roleText(r){ return {approver: '审批人', analyst: '分析师', admin: '管理员'}[r] || r || ''; },
+    runOf(pv, i){ return (pv.actions || [])[i]; },
+    runText(r){ if (!r) return ''; if (r.skipped) return '未执行'; if (r.error) return '失败：' + r.error; let t = r.result || ''; try { const j = JSON.parse(t); t = j.sent || j.msg || t; } catch(e){} return '已执行 · ' + t; },
+    stateText(pv){ return {proposed: '待采纳', adopted: '实施中', rejected: '已否决', accepted: '已验收'}[pv.state] || pv.state; },
+    stateClass(pv){ return {proposed: 't-heat text-heat', adopted: 't-accent text-accent', rejected: 'bg-line text-muted', accepted: 't-good text-good'}[pv.state]; },
     outcomeText(o){ return {achieved: '达成', missed: '没做到', guard_broken: '护栏破了', no_data: '没有数据'}[o] || o; },
-    outcomeClass(o){ return {achieved: 'bg-emerald-500/20 text-emerald-400', missed: 'bg-rose-500/20 text-rose-400', guard_broken: 'bg-amber-500/20 text-amber-400', no_data: 'bg-line text-muted'}[o]; },
+    outcomeClass(o){ return {achieved: 't-good text-good', missed: 't-bad text-bad', guard_broken: 't-heat text-heat', no_data: 'bg-line text-muted'}[o]; },
   };
 }
 </script>

@@ -1,5 +1,5 @@
 {{define "head"}}<!doctype html>
-<html lang="en" class="h-full">
+<html lang="zh-CN" class="h-full">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,14 +11,17 @@
   <!-- set theme before paint to avoid a flash -->
   <script>(function(){ if ((localStorage.getItem('di-theme')||'dark')==='light') document.documentElement.classList.add('light'); })();</script>
   <style>
-    :root { --bg:#0b0f17; --panel:#121826; --txt:#e2e8f0; --muted:#94a3b8; --line:#1e293b; --accent:#6ea8fe; }
-    html.light { --bg:#f6f7f9; --panel:#ffffff; --txt:#0b1220; --muted:#64748b; --line:#e2e8f0; --accent:#2563eb; }
+    :root { --bg:#0d0f13; --panel:#15181e; --txt:#e8eaee; --muted:#8b93a1; --line:#242933; --accent:#7cb4ff; --heat:#ffb547; --good:#4fd1a5; --bad:#ff7a7a; }
+    html.light { --bg:#f3f4f6; --panel:#ffffff; --txt:#111318; --muted:#636b78; --line:#e3e6eb; --accent:#2563eb; --heat:#c46a00; --good:#0f8a63; --bad:#c9373b; }
+    body { font-family: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif; }
+    .num { font-family: "DIN Alternate", "Bahnschrift", "PingFang SC", system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: 0; }
     .theme-sun { display: none; } html.light .theme-sun { display: inline; } html.light .theme-moon { display: none; }
   </style>
   <script>
     tailwind.config = { theme: { extend: { colors: {
       ink: 'var(--bg)', panel: 'var(--panel)', accent: 'var(--accent)',
       txt: 'var(--txt)', muted: 'var(--muted)', line: 'var(--line)',
+      heat: 'var(--heat)', good: 'var(--good)', bad: 'var(--bad)',
     } } } };
     function toggleTheme(){ const h=document.documentElement; h.classList.toggle('light');
       localStorage.setItem('di-theme', h.classList.contains('light')?'light':'dark'); }
@@ -31,7 +34,7 @@
     });
   </script>
 </head>
-<body class="h-full bg-ink text-txt transition-colors" style="font-family: ui-sans-serif, system-ui, -apple-system, sans-serif">
+<body class="h-full bg-ink text-txt transition-colors">
   <header class="border-b border-line px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 bg-ink/95 backdrop-blur z-10">
     <a href="/ui" class="flex items-center gap-2 shrink-0">
       <span class="h-7 w-7 rounded-lg bg-accent/20 ring-1 ring-accent/40 grid place-items-center text-accent font-bold">DI</span>
@@ -39,13 +42,13 @@
     </a>
     <nav class="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
       {{$a := .Active}}
-      <a href="/ui/copilot" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "copilot"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">copilot</a>
+      <a href="/ui/copilot" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "copilot"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">顾问对话</a>
       <a href="/ui/consult" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "consult"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">咨询</a>
-      <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">query</a>
-      <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">model</a>
-      <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">eval</a>
-      <a href="/ui/runs" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "runs"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">runs</a>
-      <a href="/ui/traces" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "traces"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">traces</a>
+      <a href="/ui" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "query"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">查询</a>
+      <a href="/ui/model" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "model"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">模型</a>
+      <a href="/ui/eval" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "eval"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">评测</a>
+      <a href="/ui/runs" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "runs"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">运行记录</a>
+      <a href="/ui/traces" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap {{if eq $a "traces"}}bg-accent/15 text-accent ring-1 ring-accent/30{{else}}text-muted hover:text-txt{{end}}">追踪</a>
     </nav>
     <button onclick="toggleTheme()" title="toggle theme" aria-label="toggle theme"
             class="ml-auto shrink-0 h-8 w-8 grid place-items-center rounded-lg ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">
