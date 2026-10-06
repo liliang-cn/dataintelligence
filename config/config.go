@@ -34,6 +34,13 @@ type Config struct {
 	// caller supplies is not something to turn on by accident on a networked
 	// service. A product that ships its own DI sets it.
 	DatabasesFile string `yaml:"databases_file"`
+
+	// Copilot and Consult configure the agent and the consulting loop; see
+	// advisor.go.
+	Copilot Copilot `yaml:"copilot"`
+	Consult Consult `yaml:"consult"`
+	dir     string  // directory of the loaded file; see Path
+
 	// ModelsDir is where generated semantic models are written. Empty puts them
 	// beside databases_file, so a product that enables runtime registration gets
 	// model generation with it — the two halves of "connect a database, then
@@ -78,6 +85,9 @@ type Warehouse struct {
 
 type Auth struct {
 	OIDC *OIDC `yaml:"oidc"` // nil → open (no bearer required); set → every request verified
+	// Users are static bearer-token identities. When any is set, requests
+	// without a valid token are no longer anonymous-by-default: they are refused.
+	Users []User `yaml:"users"`
 }
 
 type OIDC struct {
@@ -113,6 +123,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()
+	if err := c.resolveAdvisor(path); err != nil {
+		return nil, err
+	}
 	// Zero databases is legitimate only when they can be registered later:
 	// that is a product shipping DI before its user has connected anything.
 	// Without databases_file it is a misconfiguration that would otherwise
