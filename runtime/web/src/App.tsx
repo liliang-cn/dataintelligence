@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Redirect, Route, Switch } from 'wouter';
 import { LoaderCircleIcon, WifiOffIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -5,9 +6,11 @@ import { Shell } from '@/components/shell';
 import { SignInScreen } from '@/components/sign-in';
 import { ModelProvider } from '@/lib/model';
 import { useSession } from '@/lib/session';
-import { ChatPage } from '@/pages/chat';
 import { ConsultPage } from '@/pages/consult';
-import { MetricsPage } from '@/pages/metrics';
+
+// the chat brings the Markdown renderer; neither it nor the metrics list is needed to open the board
+const ChatPage = lazy(() => import('@/pages/chat').then((m) => ({ default: m.ChatPage })));
+const MetricsPage = lazy(() => import('@/pages/metrics').then((m) => ({ default: m.MetricsPage })));
 
 export function App() {
   const { state, error, refresh } = useSession();
@@ -34,6 +37,7 @@ export function App() {
   return (
     <ModelProvider enabled>
       <Shell>
+        <Suspense fallback={<div className="grid h-60 place-items-center text-muted-foreground"><LoaderCircleIcon className="size-5 animate-spin" /></div>}>
         <Switch>
           <Route path="/app/consult" component={ConsultPage} />
           <Route path="/app/chat" component={ChatPage} />
@@ -41,6 +45,7 @@ export function App() {
           <Route path="/">{() => <Redirect to="/app/consult" replace />}</Route>
           <Route>{() => <Redirect to="/app/consult" replace />}</Route>
         </Switch>
+        </Suspense>
       </Shell>
     </ModelProvider>
   );
