@@ -13,7 +13,7 @@ import { Markdown } from '@/components/markdown';
 import { useIsPhone } from '@/hooks/use-media';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
-import { dayTime, toolName, toolTouchesBoard } from '@/lib/words';
+import { dayTime, toolName, toolTouchesBoard, VERIFY_STEP } from '@/lib/words';
 
 type Step = { tool: string; done: boolean; at: number; ms?: number };
 type Turn = {
@@ -24,6 +24,8 @@ type Turn = {
   steps: Step[];
   thinking?: string;
   answer?: string;
+  /** what the final check changed in the answer, one line each */
+  corrected?: string[];
   error?: string;
   ms?: number;
 };
@@ -59,7 +61,7 @@ function seconds(ms?: number) {
   return ms < 1000 ? '不到 1 秒' : `${Math.round(ms / 1000)} 秒`;
 }
 
-/** Stream one copilot run. Events: thinking | tool_call | tool_result | complete | error. */
+/** Stream one copilot run. Events: thinking | tool_call | tool_result | verify | verified | complete | error. */
 async function stream(question: string, signal: AbortSignal, on: (ev: { kind: string; tool?: string; text?: string }) => void) {
   const res = await fetch('/v1/copilot/stream', {
     method: 'POST',
@@ -105,8 +107,7 @@ function Activity({ turn }: { turn: Turn }) {
   useEffect(() => {
     if (!running) setOpen(false);
   }, [running]);
-  const calls = turn.steps.length;
-  if (!calls && !running) return null;
+  if (!turn.steps.length && !running) return null;
   return (
     <Collapsible open={open || running} onOpenChange={setOpen} className="rounded-2xl border bg-surface/60">
       <CollapsibleTrigger
@@ -115,7 +116,11 @@ function Activity({ turn }: { turn: Turn }) {
       >
         {running ? <LoaderCircleIcon className="size-4 animate-spin text-primary" /> : <CheckIcon className="size-4 text-success" />}
         <span className="min-w-0 flex-1 truncate font-semibold">
-          {running ? (turn.steps.at(-1) && !turn.steps.at(-1)!.done ? `正在${toolName(turn.steps.at(-1)!.tool)}…` : '正在思考…') : `调用了 ${calls} 次工具，用时 ${seconds(turn.ms)}`}
+          {running
+            ? turn.steps.at(-1) && !turn.steps.at(-1)!.done
+              ? turn.steps.at(-1)!.tool === VERIFY_STEP ? '核对中…' : `正在${toolName(turn.steps.at(-1)!.tool)}…`
+              : '正在思考…'
+            : `调用了 ${turn.steps.filter((s) => s.tool !== VERIFY_STEP).length} 次工具${turn.steps.some((s) => s.tool === VERIFY_STEP) ? '并核对了回答' : ''}，用时 ${seconds(turn.ms)}`}
         </span>
         {!running && <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />}
       </CollapsibleTrigger>
@@ -157,6 +162,14 @@ function TurnView({ turn }: { turn: Turn }) {
           {turn.answer && (
             <div className="rounded-2xl bg-card px-4 py-4 ring-1 ring-border/70 md:px-5">
               <Markdown text={turn.answer} />
+              {turn.corrected && turn.corrected.length > 0 && (
+                <div className="mt-4 border-t pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                  <p className="font-semibold">核对时改正了 {turn.corrected.length} 处：</p>
+                  <ul className="mt-1 grid list-disc gap-0.5 pl-5">
+                    {turn.corrected.map((c, i) => <li key={i}>{c}</li>)}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
           {turn.status === 'error' && (
@@ -243,6 +256,13 @@ export function ChatPage() {
             if (j >= 0) steps[j] = { ...steps[j], done: true, ms: Date.now() - steps[j].at };
             return { ...t, steps };
           });
+        else if (ev.kind === 'verify') update(id, (t) => ({ ...t, steps: [...t.steps.map((s) => (s.done ? s : { ...s, done: true })), { tool: VERIFY_STEP, done: false, at: Date.now() }] }));
+        else if (ev.kind === 'verified')
+          update(id, (t) => ({
+            ...t,
+            corrected: (ev.text ?? '').split('\n').map((x) => x.trim()).filter(Boolean),
+            steps: t.steps.map((s) => (s.tool === VERIFY_STEP && !s.done ? { ...s, done: true, ms: Date.now() - s.at } : s)),
+          }));
         else if (ev.kind === 'complete') {
           const text = ev.text ?? '';
           const failed = text.startsWith('error: ');

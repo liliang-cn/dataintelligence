@@ -89,8 +89,12 @@ const TOOLS: Record<string, string> = {
   send_command: '下发指令',
 };
 
+/** The copilot checking its own answer against what its tools returned. */
+export const VERIFY_STEP = '__verify';
+
 export function toolName(t?: string) {
   if (!t) return '思考';
+  if (t === VERIFY_STEP) return '核对回答里的名称和数字';
   const bare = t.includes('__') ? t.split('__').pop()! : t;
   return TOOLS[bare] ?? TOOLS[t] ?? (t.includes('__') ? '调用外部系统' : '调用工具');
 }
