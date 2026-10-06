@@ -227,7 +227,8 @@ function consultPage(){
       this.tokenInput = ''; this.whoami().then(() => this.load());
     },
     authLabel(){ return {users: '令牌', oidc: 'OIDC', 'users+oidc': '令牌 / OIDC', open: '开发模式（无认证）'}[this.auth] || this.auth; },
-    num(v){ if (v === null || v === undefined) return '无数据'; return Number(v).toLocaleString('zh-CN', {maximumFractionDigits: 2}); },
+    // small values (rates, shares) keep four significant digits: 0.01339 must not read as 0.01
+    num(v){ if (v === null || v === undefined) return '无数据'; const x = Number(v); return Math.abs(x) < 1 && x !== 0 ? x.toLocaleString('zh-CN', {maximumSignificantDigits: 4}) : x.toLocaleString('zh-CN', {maximumFractionDigits: 2}); },
     pct(v){ return ' ' + Math.round(v * 1000) / 10 + '%'; },
     dir(d){ return d === 'down' ? '下降' : '上升'; },
     day(t){ return t ? String(t).slice(0, 10) : ''; },
