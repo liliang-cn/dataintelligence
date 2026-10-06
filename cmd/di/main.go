@@ -221,7 +221,9 @@ func runServe(argv []string) {
 	// Config-driven when the file exists; otherwise synthesize from flags/env so
 	// `di serve` still works out of the box.
 	var cfg *config.Config
-	if _, statErr := os.Stat(*cfgPath); statErr == nil {
+	_, statErr := os.Stat(*cfgPath)
+	fromFile := statErr == nil
+	if fromFile {
 		c, err := config.Load(*cfgPath)
 		if err != nil {
 			fail(err)
@@ -314,12 +316,22 @@ func runServe(argv []string) {
 
 	// One parent mux: stable /v1 data-plane API + the existing control-plane API
 	// + the embedded web console at /ui.
-	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement}
+	// The copilot, the consulting loop and external MCP servers hang off the
+	// default database.
+	adv, err := buildAdvisor(ctx, cfg, eng, pol, checksFor(cfg, fromFile))
+	if err != nil {
+		fail(err)
+	}
+	defer adv.Close()
+	adv.acceptLoop(ctx, cfg.Consult.Interval())
+
+	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement, Users: adv.users, Consult: adv.consult}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
+	consoleOpts := ui.Options{Copilot: adv.cop, Identify: v1.Principal, AuthMode: v1.AuthMode(), Consult: adv.consult != nil}
 	if eng == nil {
 		fmt.Fprintf(os.Stderr, "-- no database configured yet; the console and control-plane API are not mounted (register one: POST /v1/databases)\n")
-	} else if console, uerr := ui.New(eng, pol, fe); uerr == nil {
+	} else if console, uerr := ui.New(eng, pol, fe, consoleOpts); uerr == nil {
 		console.Mount(mux)
 		mux.Handle("/", runtime.NewServer(eng, fe))
 	} else {
@@ -335,6 +347,7 @@ func runServe(argv []string) {
 	go func() { errc <- serveNamed("MCP", mcpSrv) }()
 	fmt.Fprintf(os.Stderr, "DataIntelligence service up:\n  Console  → %s/ui\n  REST /v1 → %s  (GET /v1/metrics /v1/metrics/{m}/dimensions ; POST /v1/query /v1/ground /v1/ask ; /v1/healthz /v1/readyz)\n  MCP      → %s  (%s)\n  auth: %s · otel: %v\n",
 		cfg.Server.RESTAddr, cfg.Server.RESTAddr, cfg.Server.MCPAddr, strings.Join(mcpserver.ToolNames, "/"), authNote, cfg.Server.OTel)
+	fmt.Fprintf(os.Stderr, "  advisor: %s\n", adv.describe())
 	ids := reg.IDs()
 	fmt.Fprintf(os.Stderr, "  databases (%d, default %q):\n", len(ids), reg.Default())
 	for _, id := range ids {
@@ -622,35 +635,64 @@ func runModelGen(argv []string) {
 // The agent decides WHAT to call; the deterministic tools guarantee each result.
 func runCopilot(argv []string) {
 	fs := flag.NewFlagSet("copilot", flag.ExitOnError)
-	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN")
-	model := fs.String("model", "models/meridian.yaml", "semantic model YAML")
+	cfgPath := fs.String("config", "", "service config YAML: same model, warehouse, copilot, consult and MCP servers as `di serve`")
+	dsn := fs.String("dsn", envOr("DI_DSN", defaultDSN), "warehouse DSN (without -config)")
+	model := fs.String("model", "models/meridian.yaml", "semantic model YAML (without -config)")
 	goal := fs.String("goal", "Describe this warehouse, run a health check for cross-source conflicts, answer: which store region has the highest net revenue, then recommend the single highest-priority governed fix.", "the agent's goal")
-	checks := fs.String("checks", "examples/meridian/conflicts.yaml", "conflict checks YAML")
+	checks := fs.String("checks", "examples/meridian/conflicts.yaml", "conflict checks YAML (without -config)")
+	user := fs.String("user", "", "who is asking: the identity the tools act as, and the proposer of any plan")
+	role := fs.String("role", "analyst", "the asker's role (with -user, or the copilot's role without -config)")
 	_ = fs.Parse(argv)
 
 	if !copilot.Available() {
 		fail(fmt.Errorf("copilot is the AI showcase — set LLM_BASE_URL/LLM_API_KEY/LLM_MODEL first"))
 	}
 	ctx := context.Background()
-	eng, err := engine.New(ctx, *model, *dsn)
+	cfg := &config.Config{Model: *model, Warehouse: config.Warehouse{DSN: *dsn}}
+	cfg.Copilot.Principal = config.Identity{User: "copilot", Role: *role}
+	cfg.Consult.Disabled = true
+	chk := *checks
+	if *cfgPath != "" {
+		c, err := config.Load(*cfgPath)
+		if err != nil {
+			fail(err)
+		}
+		cfg, chk = c, checksFor(c, true)
+	}
+	defs := cfg.Defs()
+	if len(defs) == 0 {
+		fail(fmt.Errorf("copilot: no database configured"))
+	}
+	eng, err := engine.New(ctx, defs[0].Model, defs[0].DSN)
 	if err != nil {
 		fail(err)
 	}
 	defer eng.Close()
-
-	agent, err := copilot.New(eng, governance.DefaultPolicy(), *checks)
+	pol := governance.DefaultPolicy()
+	pol.TenantBudgetBytes = cfg.Governance.TenantBudgetBytes
+	adv, err := buildAdvisor(ctx, cfg, eng, pol, chk)
 	if err != nil {
 		fail(err)
 	}
-	defer agent.Close()
+	defer adv.Close()
+	if adv.cop == nil {
+		fail(fmt.Errorf("copilot could not be built"))
+	}
+	if *user != "" {
+		ctx = copilot.WithPrincipal(ctx, governance.Principal{User: *user, Role: *role, Attrs: map[string]string{}, Engagement: cfg.Engagement})
+	}
 
-	fmt.Fprintf(os.Stderr, "-- copilot goal: %s\n\n", *goal)
-	res, err := agent.Run(ctx, *goal)
+	fmt.Fprintf(os.Stderr, "-- copilot goal: %s\n-- tools: %s\n\n", *goal, strings.Join(adv.cop.ToolNames(), ", "))
+	res, err := adv.cop.Stream(ctx, *goal, func(ev copilot.StreamEvent) {
+		if ev.Kind == "tool_call" {
+			fmt.Fprintf(os.Stderr, "   → %s\n", ev.Tool)
+		}
+	})
 	if err != nil {
 		fail(err)
 	}
 	fmt.Printf("%s\n", res.Answer)
-	fmt.Fprintf(os.Stderr, "\n-- agent: steps=%d tool_calls=%d tools=%v\n", res.Steps, res.ToolCalls, res.Tools)
+	fmt.Fprintf(os.Stderr, "\n-- agent: tool_calls=%d tools=%v\n", res.ToolCalls, res.Tools)
 }
 
 // runReconcile detects cross-source data conflicts (deterministic SQL checks)

@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -27,27 +28,52 @@ var assets embed.FS
 
 // UI renders the console over the shared engine + governance core.
 type UI struct {
-	Eng *engine.Engine
-	Pol governance.Policy
-	Fe  *flow.Engine
-	cop *copilot.Agent // nil when LLM_* is not configured
-	tpl *template.Template
+	Eng  *engine.Engine
+	Pol  governance.Policy
+	Fe   *flow.Engine
+	cop  *copilot.Agent // nil when LLM_* is not configured
+	opts Options
+	tpl  *template.Template
 }
 
-// New parses the embedded templates and, when LLM creds are present, wires the
-// agent-go copilot.
-func New(eng *engine.Engine, pol governance.Policy, fe *flow.Engine) (*UI, error) {
+// Options wires the parts of the console that depend on how the service was
+// configured.
+type Options struct {
+	// Copilot is the agent behind /ui/copilot; nil disables the page.
+	Copilot *copilot.Agent
+	// Identify resolves the caller the way /v1 does (token, cookie, or dev
+	// name). Nil means everybody is the copilot's configured principal.
+	Identify func(*http.Request) (governance.Principal, error)
+	// AuthMode is shown on the consult page: "users", "oidc" or "open".
+	AuthMode string
+	// Consult reports whether /v1/consult is live.
+	Consult bool
+}
+
+// New parses the embedded templates.
+func New(eng *engine.Engine, pol governance.Policy, fe *flow.Engine, opts Options) (*UI, error) {
 	tpl, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	u := &UI{Eng: eng, Pol: pol, Fe: fe, tpl: tpl}
-	if copilot.Available() {
-		if a, aerr := copilot.New(eng, pol, "examples/meridian/conflicts.yaml"); aerr == nil {
-			u.cop = a
-		}
+	return &UI{Eng: eng, Pol: pol, Fe: fe, tpl: tpl, cop: opts.Copilot, opts: opts}, nil
+}
+
+// copilotContext binds the caller's identity to the run, so every tool acts as
+// the person asking. An anonymous dev caller runs as the configured principal.
+func (u *UI) copilotContext(r *http.Request) (context.Context, error) {
+	ctx := r.Context()
+	if u.opts.Identify == nil {
+		return ctx, nil
 	}
-	return u, nil
+	p, err := u.opts.Identify(r)
+	if err != nil {
+		return nil, fmt.Errorf("需要身份才能使用 copilot：%v（在「咨询」页设置令牌）", err)
+	}
+	if p.User == "" || p.User == "anon" {
+		return ctx, nil
+	}
+	return copilot.WithPrincipal(ctx, p), nil
 }
 
 // Mount registers the console routes on mux under /ui.
@@ -67,6 +93,11 @@ func (u *UI) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/copilot", u.copilotPage)
 	mux.HandleFunc("POST /ui/copilot/ask", u.copilotAsk)
 	mux.HandleFunc("GET /ui/copilot/stream", u.copilotStream)
+	mux.HandleFunc("GET /ui/consult", u.consultPage)
+}
+
+func (u *UI) consultPage(w http.ResponseWriter, _ *http.Request) {
+	u.render(w, "consult.html", page("consult", map[string]any{"Enabled": u.opts.Consult, "AuthMode": u.opts.AuthMode}))
 }
 
 // copilotStream runs the agent and streams its tool calls live over SSE.
@@ -94,7 +125,12 @@ func (u *UI) copilotStream(w http.ResponseWriter, r *http.Request) {
 		send(copilot.StreamEvent{Kind: "complete", Text: "ask something"})
 		return
 	}
-	if _, err := u.cop.Stream(r.Context(), goal, send); err != nil {
+	ctx, err := u.copilotContext(r)
+	if err != nil {
+		send(copilot.StreamEvent{Kind: "complete", Text: err.Error()})
+		return
+	}
+	if _, err := u.cop.Stream(ctx, goal, send); err != nil {
 		send(copilot.StreamEvent{Kind: "complete", Text: "error: " + err.Error()})
 	}
 }
@@ -116,7 +152,12 @@ func (u *UI) copilotAsk(w http.ResponseWriter, r *http.Request) {
 		u.render(w, "copilot_result.html", map[string]any{"Error": "ask something"})
 		return
 	}
-	res, err := u.cop.Run(r.Context(), goal)
+	ctx, err := u.copilotContext(r)
+	if err != nil {
+		u.render(w, "copilot_result.html", map[string]any{"Error": err.Error()})
+		return
+	}
+	res, err := u.cop.Run(ctx, goal)
 	if err != nil {
 		u.render(w, "copilot_result.html", map[string]any{"Error": err.Error()})
 		return

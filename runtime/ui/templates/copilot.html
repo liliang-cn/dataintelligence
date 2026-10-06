@@ -2,7 +2,7 @@
 <div class="max-w-3xl mx-auto space-y-4">
   <div>
     <h1 class="text-lg font-semibold flex items-center gap-2">Copilot <span class="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent">agent-go</span></h1>
-    <p class="text-sm text-muted">An autonomous agent that calls governed platform tools to answer and recommend — live.</p>
+    <p class="text-sm text-muted">调用受治理的工具来回答和建议。它能记目标、写有证据的结论、提出计划；采纳和验收只能由人在 <a href="/ui/consult" class="text-accent">咨询</a> 页完成。</p>
   </div>
 
   {{if not .Enabled}}
@@ -12,12 +12,12 @@
   {{else}}
   <form onsubmit="return runCopilot(event)" class="card bg-panel rounded-2xl ring-1 ring-line p-4 space-y-3">
     <textarea name="goal" rows="3" class="w-full bg-ink ring-1 ring-line rounded-lg px-3 py-2 text-sm"
-      placeholder="Ask the agent…">Describe this warehouse, run a health check for cross-source conflicts, answer which store region has the highest net revenue, then recommend the single highest-priority governed fix.</textarea>
+      placeholder="问 copilot…">先看看有哪些指标和维度，找出最值得改进的一个，然后告诉我依据。</textarea>
     <div class="flex flex-wrap gap-2">
       <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
-        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Run a health check and triage the worst conflict.</button>
+        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">列出咨询记录，告诉我每个目标现在走到哪一步、下一步该谁做什么。</button>
       <button type="button" onclick="this.closest('form').querySelector('textarea').value=this.textContent"
-        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">Revenue and units sold by product category.</button>
+        class="text-xs px-3 py-1.5 rounded-full ring-1 ring-line text-muted hover:text-accent hover:ring-accent/40">我想在 30 天内把一个关键指标提升 10%：先记下目标，调查原因，写下有证据的结论，再提出一个带护栏的计划。</button>
     </div>
     <button id="cop-run" class="w-full bg-accent text-ink font-semibold rounded-lg py-3 sm:py-2 text-base hover:brightness-110 transition">Run agent</button>
   </form>
