@@ -58,7 +58,7 @@ type Options struct {
 	// Remote exposes allow-listed external MCP tools and names the actions a
 	// plan may carry.
 	Remote *remotemcp.Set
-	// MaxTurns bounds one run (default 30).
+	// MaxTurns bounds one run (default 60).
 	MaxTurns int
 }
 
@@ -113,7 +113,7 @@ func New(ctx context.Context, eng *engine.Engine, pol governance.Policy, opts Op
 	}
 	a := &Agent{svc: svc, llm: llmp, turns: opts.MaxTurns}
 	if a.turns <= 0 {
-		a.turns = 30
+		a.turns = 60
 	}
 	for _, t := range ts {
 		svc.AddToolWithMetadata(t.name, t.desc, t.schema, t.handler, agentpkg.ToolMetadata{ReadOnly: t.readOnly, ConcurrencySafe: t.readOnly})

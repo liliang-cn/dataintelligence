@@ -118,7 +118,7 @@ func buildAdvisor(ctx context.Context, cfg *config.Config, eng *engine.Engine, p
 		}
 		a.cop, err = copilot.New(ctx, eng, pol, copilot.Options{
 			Principal:  identity(cfg.Copilot.Principal, "copilot", cfg.Engagement),
-			ChecksPath: checks, Brief: brief, Consult: a.consult, Remote: a.remote,
+			ChecksPath: checks, Brief: brief, Consult: a.consult, Remote: a.remote, MaxTurns: cfg.Copilot.MaxTurns,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "-- copilot disabled: %v\n", err)

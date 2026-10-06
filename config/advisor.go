@@ -33,6 +33,9 @@ type Copilot struct {
 	// BriefFile is an optional domain brief appended to the generic system
 	// prompt. Relative paths resolve against the config file's directory.
 	BriefFile string `yaml:"brief_file"`
+	// MaxTurns bounds one copilot run (default 60): a whole-business review asks dozens of
+	// questions before it can record a goal, findings and a plan.
+	MaxTurns int `yaml:"max_turns"`
 	// Checks is the conflict-check file behind health_check; empty disables
 	// the tool.
 	Checks string `yaml:"checks"`
