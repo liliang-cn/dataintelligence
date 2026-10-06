@@ -75,13 +75,13 @@ function EvidencePanel({ e, open, onOpenChange }: { e: Evidence; open: boolean; 
 export function FindingCard({ f, highlight }: { f: Finding; highlight?: boolean }) {
   const [open, setOpen] = useState<number | null>(null);
   return (
-    <article id={`finding-${f.id}`} className={cn('flex scroll-mt-24 flex-col rounded-2xl border bg-card p-4 transition-shadow md:p-5', highlight && 'ring-3 ring-primary/40')}>
+    <article id={`finding-${f.id}`} className={cn('flex min-w-0 scroll-mt-24 flex-col rounded-2xl border bg-card p-4 transition-shadow md:p-5', highlight && 'ring-3 ring-primary/40')}>
       <div className="flex gap-3">
         <span className="grid h-7 min-w-7 shrink-0 place-items-center rounded-lg bg-accent px-1.5 text-[13px] font-extrabold text-accent-foreground tabular-nums">{f.id}</span>
         <p className="pt-0.5 text-[14.5px] leading-relaxed">{f.says}</p>
       </div>
       {f.evidence?.length > 0 && (
-        <ul className="mt-3.5 grid gap-1.5 pl-10">
+        <ul className="mt-3.5 grid min-w-0 grid-cols-1 gap-1.5 md:pl-10">
           {f.evidence.map((e, i) => (
             <li key={i}>
               <button
@@ -90,7 +90,7 @@ export function FindingCard({ f, highlight }: { f: Finding; highlight?: boolean 
                 className="group flex w-full items-center gap-2.5 rounded-xl border bg-surface/60 px-3 py-2 text-left outline-none transition-colors hover:border-primary/40 hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/40"
               >
                 <TableIcon className="size-4 shrink-0 text-primary" />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{e.asked || `证据 ${i + 1}`}</span>
+                <span className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-snug md:line-clamp-1">{e.asked || `证据 ${i + 1}`}</span>
                 <span className="shrink-0 text-[12px] text-muted-foreground tabular-nums">{e.row_count} 行</span>
                 <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </button>

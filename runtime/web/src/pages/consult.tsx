@@ -13,7 +13,7 @@ import { dayTime } from '@/lib/words';
 
 function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
   return (
-    <section className="border-t px-5 py-6 md:px-8 md:py-7">
+    <section className="border-t px-4 py-6 md:px-8 md:py-7">
       <h3 className="flex flex-wrap items-baseline gap-x-2 text-[15px] font-extrabold">
         {title}
         {note && <span className="text-[12.5px] font-normal text-muted-foreground">{note}</span>}

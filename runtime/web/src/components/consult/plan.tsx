@@ -350,7 +350,7 @@ export function PlanCard({ pv, findings, onChanged, onJump }: { pv: PlanView; fi
   return (
     <article className="overflow-hidden rounded-2xl border bg-card">
       <div className="grid lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="p-5 md:p-6">
+        <div className="min-w-0 p-4 md:p-6">
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-bold text-muted-foreground tabular-nums">计划 {p.id}</span>
             <StateBadge state={pv.state} />
@@ -381,7 +381,7 @@ export function PlanCard({ pv, findings, onChanged, onJump }: { pv: PlanView; fi
           </dl>
           <Actions pv={pv} />
         </div>
-        <aside className="border-t bg-surface/70 p-5 md:p-6 lg:border-t-0 lg:border-l" aria-label="决定记录">
+        <aside className="border-t bg-surface/70 p-4 md:p-6 lg:border-t-0 lg:border-l" aria-label="决定记录">
           <h4 className="mb-4 flex items-center gap-1.5 text-[13px] font-bold">
             <CircleDashedIcon className="size-4 text-primary" /> 决定记录
           </h4>
