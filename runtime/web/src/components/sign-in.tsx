@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Brand } from '@/components/brand';
-import { setDevUser, setToken, signOut } from '@/lib/api';
+import { api, ApiError, setDevUser, setToken, type Me } from '@/lib/api';
 import { useSession } from '@/lib/session';
 import { roleName } from '@/lib/words';
 
@@ -24,14 +24,23 @@ export function TokenForm({ onDone }: { onDone?: () => void }) {
     }
     setBusy(true);
     setError('');
-    if (open) setDevUser(value);
-    else setToken(value);
+    // check the token before it replaces the one in use, so a typo signs nobody out
+    if (!open) {
+      try {
+        await api<Me>('/v1/whoami', { headers: { Authorization: `Bearer ${value.trim()}` } });
+      } catch (err) {
+        setBusy(false);
+        setError(err instanceof ApiError && err.status === 401 ? '这个令牌不对，或者已经停用。核对后重新粘贴。' : `现在没法核对令牌：${(err as Error).message}`);
+        return;
+      }
+      setToken(value);
+    } else {
+      setDevUser(value);
+    }
     const me = await refresh();
     setBusy(false);
     if (!me) {
-      signOut();
-      await refresh();
-      setError('这个令牌不对，或者已经停用。核对后重新粘贴。');
+      setError('登录没有成功，稍后再试。');
       return;
     }
     setValue('');
