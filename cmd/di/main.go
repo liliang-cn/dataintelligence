@@ -324,6 +324,13 @@ func runServe(argv []string) {
 	}
 	defer adv.Close()
 	adv.acceptLoop(ctx, cfg.Consult.Interval())
+	if len(adv.users) > 0 {
+		if verifier == nil {
+			authNote = fmt.Sprintf("static bearer tokens (%d users from auth.users) on /v1 and the console", len(adv.users))
+		} else {
+			authNote += fmt.Sprintf(" + %d static users", len(adv.users))
+		}
+	}
 
 	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement, Users: adv.users, Consult: adv.consult}
 	mux := http.NewServeMux()
