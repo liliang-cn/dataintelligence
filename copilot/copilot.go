@@ -65,6 +65,7 @@ type Options struct {
 // Agent is a ready-to-run platform copilot.
 type Agent struct {
 	svc   *agentpkg.Service
+	llm   domain.Generator
 	tools []string
 	turns int
 }
@@ -75,6 +76,8 @@ type Result struct {
 	Tools     []string
 	ToolCalls int
 	Steps     int
+	// Corrected is what the check against the tool results took out of or fixed in the answer.
+	Corrected []string
 }
 
 // Available reports whether LLM creds are configured (the copilot needs them).
@@ -108,7 +111,7 @@ func New(ctx context.Context, eng *engine.Engine, pol governance.Policy, opts Op
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{svc: svc, turns: opts.MaxTurns}
+	a := &Agent{svc: svc, llm: llmp, turns: opts.MaxTurns}
 	if a.turns <= 0 {
 		a.turns = 30
 	}
@@ -135,7 +138,7 @@ func (a *Agent) Close() error { return a.svc.Close() }
 // StreamEvent is a progress event during a streaming run (UI-facing, no agent-go
 // types leak out).
 type StreamEvent struct {
-	Kind string `json:"kind"` // tool_call | tool_result | thinking | complete
+	Kind string `json:"kind"` // tool_call | tool_result | thinking | verify | verified | complete
 	Tool string `json:"tool,omitempty"`
 	Text string `json:"text,omitempty"`
 }
@@ -150,13 +153,17 @@ func (a *Agent) Stream(ctx context.Context, goal string, emit func(StreamEvent))
 	var answer, partial, failure string
 	var tools []string
 	calls := 0
+	var evid evidence
+	args := map[string]map[string]any{}
 	for ev := range ch {
 		switch ev.Type {
 		case agentpkg.EventTypeToolCall:
 			calls++
 			tools = append(tools, ev.ToolName)
+			args[ev.ToolName] = ev.ToolArgs
 			emit(StreamEvent{Kind: "tool_call", Tool: ev.ToolName})
 		case agentpkg.EventTypeToolResult:
+			evid.add(ev.ToolName, args[ev.ToolName], ev.ToolResult)
 			emit(StreamEvent{Kind: "tool_result", Tool: ev.ToolName})
 		case agentpkg.EventTypeThinking:
 			emit(StreamEvent{Kind: "thinking", Text: ev.Content})
@@ -171,11 +178,16 @@ func (a *Agent) Stream(ctx context.Context, goal string, emit func(StreamEvent))
 	if answer == "" {
 		answer = partial
 	}
+	var corrected []string
 	if answer == "" && failure != "" {
 		answer = "error: " + failure
+	} else if calls > 0 {
+		emit(StreamEvent{Kind: "verify", Text: "对照本轮查询结果核对回答里的名称和数字"})
+		answer, corrected = verify(ctx, a.llm, answer, &evid)
+		emit(StreamEvent{Kind: "verified", Text: strings.Join(corrected, "\n")})
 	}
 	emit(StreamEvent{Kind: "complete", Text: answer})
-	return &Result{Answer: answer, Tools: tools, ToolCalls: calls}, nil
+	return &Result{Answer: answer, Tools: tools, ToolCalls: calls, Corrected: corrected}, nil
 }
 
 // Run executes the agent loop for a goal and returns the synthesized result.
