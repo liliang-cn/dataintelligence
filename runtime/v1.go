@@ -19,6 +19,7 @@ import (
 
 	"github.com/liliang-cn/dataintelligence/anchor"
 	"github.com/liliang-cn/dataintelligence/branch"
+	"github.com/liliang-cn/dataintelligence/consult"
 	"github.com/liliang-cn/dataintelligence/engine"
 	"github.com/liliang-cn/dataintelligence/governance"
 	"github.com/liliang-cn/dataintelligence/grounding"
@@ -37,6 +38,12 @@ import (
 // the warehouse. It shares the exact governance/identity/observability core with
 // the MCP server — one engine, two contracts.
 type V1 struct {
+	// Users are static bearer-token identities (auth.users); see identity.go.
+	Users []StaticUser
+	// Consult is the consulting loop over the default database; nil disables
+	// /v1/consult.
+	Consult *consult.Service
+
 	DBs    *engine.Databases
 	Pol    governance.Policy
 	Verify auth.TokenVerifier // nil → open (dev): identity from X-DI-* headers
@@ -104,6 +111,7 @@ func (v *V1) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/branch/diff", v.branchDiffV1)
 	mux.HandleFunc("POST /v1/branch/promote", v.branchPromoteV1)
 	mux.HandleFunc("POST /v1/branch/discard", v.branchDiscardV1)
+	v.mountConsult(mux)
 	return v.middleware(mux)
 }
 
@@ -142,9 +150,17 @@ func (v *V1) readyz(w http.ResponseWriter, r *http.Request) {
 // token is verified and claims (role/tenant/region) become the principal; open
 // mode reads dev headers. The identity flows to governance → warehouse OBO.
 func (v *V1) principalFrom(r *http.Request) (governance.Principal, bool, error) {
+	if len(v.Users) > 0 {
+		if p, ok := v.staticPrincipal(r); ok {
+			return p, true, nil
+		}
+		if v.Verify == nil {
+			return governance.Principal{}, false, errString("missing or unknown bearer token")
+		}
+	}
 	if v.Verify == nil {
 		role := orDefault(r.Header.Get("X-DI-Role"), "analyst")
-		return governance.Principal{User: "anon", Role: role, Engagement: v.Engagement,
+		return governance.Principal{User: devUser(r), Role: role, Engagement: v.Engagement,
 			Attrs: map[string]string{
 				"tenant": r.Header.Get("X-DI-Tenant"), "region": r.Header.Get("X-DI-Region"),
 			}}, true, nil
