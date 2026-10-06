@@ -5,9 +5,10 @@ go 1.25.7
 require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/liliang-cn/agent-go/v3 v3.33.0
+	github.com/liliang-cn/agent-go/v3 v3.44.0
 	github.com/liliang-cn/agentcli v0.1.4
-	github.com/liliang-cn/cortexdb/v2 v2.111.1
+	github.com/liliang-cn/athanor v0.1.0
+	github.com/liliang-cn/cortexdb/v2 v2.122.1
 	github.com/liliang-cn/eval-go v0.5.0
 	github.com/liliang-cn/semantic-go v0.2.2
 	github.com/marcboeker/go-duckdb v1.8.5
@@ -28,9 +29,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/0x51-dev/rdf v0.1.0 // indirect
-	github.com/0x51-dev/rids v0.1.0 // indirect
-	github.com/0x51-dev/upeg v0.1.0 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2 // indirect
 	github.com/PuerkitoBio/goquery v1.13.0 // indirect
@@ -58,6 +56,7 @@ require (
 	github.com/blevesearch/zapx/v15 v15.4.3 // indirect
 	github.com/blevesearch/zapx/v16 v16.3.4 // indirect
 	github.com/blevesearch/zapx/v17 v17.2.3 // indirect
+	github.com/cayleygraph/quad v1.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 // indirect
 	github.com/chromedp/chromedp v0.14.1 // indirect
@@ -103,11 +102,8 @@ require (
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/liliang-cn/agentexec v0.5.0 // indirect
 	github.com/liliang-cn/alchemy v0.7.7 // indirect
-	github.com/liliang-cn/alchemy/connectors v0.7.7 // indirect
-	github.com/liliang-cn/athanor v0.1.0 // indirect
 	github.com/liliang-cn/mcp-swagger-server v1.3.0 // indirect
 	github.com/liliang-cn/pipeit v0.1.0 // indirect
 	github.com/liliang-cn/skills-go v1.9.0 // indirect
@@ -125,7 +121,9 @@ require (
 	github.com/openai/openai-go/v3 v3.56.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+	github.com/piprate/json-gold v0.8.0 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.8 // indirect
+	github.com/pquerna/cachecontrol v0.2.0 // indirect
 	github.com/qdrant/go-client v1.19.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/richardlehane/mscfb v1.0.7 // indirect
