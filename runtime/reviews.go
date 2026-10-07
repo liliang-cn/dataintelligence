@@ -68,6 +68,7 @@ func OpenReviews(cfg *config.Config) (*Reviews, error) {
 		started_at TEXT NOT NULL, finished_at TEXT, answer TEXT, steps TEXT, corrected TEXT, status TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
+	r.DB = db
 	return r, nil
 }
 
