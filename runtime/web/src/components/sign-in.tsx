@@ -30,7 +30,7 @@ export function TokenForm({ onDone }: { onDone?: () => void }) {
         await api<Me>('/v1/whoami', { headers: { Authorization: `Bearer ${value.trim()}` } });
       } catch (err) {
         setBusy(false);
-        setError(err instanceof ApiError && err.status === 401 ? '这个令牌不对，或者已经停用。核对后重新粘贴。' : `现在没法核对令牌：${(err as Error).message}`);
+        setError(err instanceof ApiError && err.status === 401 ? '令牌无效' : `无法验证令牌：${(err as Error).message}`);
         return;
       }
       setToken(value);
@@ -40,7 +40,7 @@ export function TokenForm({ onDone }: { onDone?: () => void }) {
     const me = await refresh();
     setBusy(false);
     if (!me) {
-      setError('登录没有成功，稍后再试。');
+      setError('登录失败');
       return;
     }
     setValue('');
@@ -82,16 +82,10 @@ export function SignInScreen() {
         <div className="mb-7 flex flex-col items-center gap-3 text-center">
           <Brand size={44} />
           <h1 className="text-2xl font-extrabold tracking-tight">{info.title}</h1>
-          <p className="max-w-[30ch] text-sm leading-relaxed text-muted-foreground">
-            查数、找原因、定计划、到期验收。每个决定都记在做决定的人名下。
-          </p>
         </div>
         <div className="rounded-2xl bg-card p-6 shadow-float">
           <TokenForm />
         </div>
-        <p className="mt-5 text-center text-[12.5px] leading-relaxed text-muted-foreground">
-          令牌由部署方发放，每人一个，不要转给别人。
-        </p>
       </div>
     </main>
   );

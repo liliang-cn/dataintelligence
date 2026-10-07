@@ -35,8 +35,7 @@ function GoalCase({ gv, onChanged, loose }: { gv: GoalView; onChanged: () => voi
     <article className="overflow-hidden rounded-3xl bg-card shadow-card ring-1 ring-border/70">
       {loose ? (
         <header className="px-5 pt-6 pb-5 md:px-8">
-          <h2 className="text-[20px] font-extrabold">没有归到目标下的结论和计划</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">它们是在没有指定目标时记录的。</p>
+          <h2 className="text-[20px] font-extrabold">其他结论和计划</h2>
         </header>
       ) : (
         <>
@@ -50,7 +49,7 @@ function GoalCase({ gv, onChanged, loose }: { gv: GoalView; onChanged: () => voi
             {gv.findings.map((f) => <FindingCard key={f.id} f={f} highlight={lit === f.id} />)}
           </div>
         ) : (
-          <p className="text-[13.5px] text-muted-foreground">还没有结论。顾问调查后会把有证据的结论记在这里。</p>
+          <p className="text-[13.5px] text-muted-foreground">还没有结论</p>
         )}
       </Section>
       <Section title="计划" note={gv.plans.length ? `${gv.plans.length} 个` : undefined}>
@@ -59,7 +58,7 @@ function GoalCase({ gv, onChanged, loose }: { gv: GoalView; onChanged: () => voi
             {gv.plans.map((pv) => <PlanCard key={pv.plan.id} pv={pv} findings={gv.findings} onChanged={onChanged} onJump={jump} />)}
           </div>
         ) : (
-          <p className="text-[13.5px] text-muted-foreground">还没有计划。结论齐了以后，顾问会提出计划，交给审批人决定。</p>
+          <p className="text-[13.5px] text-muted-foreground">还没有计划</p>
         )}
       </Section>
     </article>
@@ -95,9 +94,6 @@ function Empty() {
         <MessagesSquareIcon className="size-6" />
       </div>
       <h2 className="mt-4 text-[19px] font-extrabold">还没有咨询目标</h2>
-      <p className="mx-auto mt-2 max-w-[42ch] text-[14px] leading-relaxed text-muted-foreground">
-        到顾问对话里说一句你想改善什么。顾问会查数、写下有证据的结论，再提出计划交给审批人。
-      </p>
       <Button asChild className="mt-6 h-10 rounded-xl px-5 font-bold">
         <Link href="/app/chat">去和顾问对话</Link>
       </Button>
@@ -117,7 +113,7 @@ export function ConsultPage() {
       setBoard(b);
       setError('');
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 404 ? '这个部署没有开启咨询档案。' : (e as Error).message);
+      setError(e instanceof ApiError && e.status === 404 ? '咨询档案未开启' : (e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -135,9 +131,6 @@ export function ConsultPage() {
       <div className="mb-6 flex flex-wrap items-end gap-x-6 gap-y-3 md:mb-8">
         <div className="mr-auto min-w-0">
           <h1 className="text-[26px] font-extrabold tracking-tight md:text-[30px]">咨询档案</h1>
-          <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
-            每个数字都来自服务器执行过的查询。计划由另一个人采纳后才会下发到现场，到期再量一次验收。
-          </p>
         </div>
         <div className="flex items-center gap-2">
           {board && <span className="text-[12.5px] text-muted-foreground">更新于 {dayTime(board.at)}</span>}

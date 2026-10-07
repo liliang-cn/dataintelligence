@@ -108,13 +108,12 @@ function HeadlineNumbers({ gv }: { gv: GoalView }) {
 function nextStep(gv: GoalView): string {
   const plans = gv.plans ?? [];
   const accepted = plans.find((p) => p.acceptance);
-  if (accepted) return `计划 ${accepted.plan.id} 已验收，结论是${OUTCOME[accepted.acceptance!.outcome]?.text ?? '已出'}。`;
+  if (accepted) return `计划 ${accepted.plan.id} 已验收：${OUTCOME[accepted.acceptance!.outcome]?.text ?? '已出结论'}`;
   const adopted = plans.find((p) => p.state === 'adopted');
-  if (adopted) return `计划 ${adopted.plan.id} 正在实施，${adopted.due ? `${day(adopted.due)}验收` : '到期验收'}。之前可以随时量一下进度。`;
+  if (adopted) return `计划 ${adopted.plan.id} 实施中${adopted.due ? `，${day(adopted.due)}验收` : ''}`;
   const proposed = plans.filter((p) => p.state === 'proposed');
-  if (proposed.length) return `等审批人决定计划 ${proposed.map((p) => p.plan.id).join('、')}。`;
-  if (!gv.findings?.length) return '顾问正在调查，有证据的结论会记在下面。';
-  return '结论已经有了，下一步由顾问提出计划。';
+  if (proposed.length) return `计划 ${proposed.map((p) => p.plan.id).join('、')} 待采纳`;
+  return '';
 }
 
 function NextStep({ gv }: { gv: GoalView }) {

@@ -93,7 +93,7 @@ function UserMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Panel open={switching} onOpenChange={setSwitching} title="换一个人登录" description="粘贴另一个人的令牌。之后的决定会记在那个人名下。">
+      <Panel open={switching} onOpenChange={setSwitching} title="换一个人登录">
         <TokenForm onDone={() => setSwitching(false)} />
       </Panel>
     </>

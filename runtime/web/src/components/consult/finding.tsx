@@ -14,7 +14,7 @@ function EvidenceTable({ e }: { e: Evidence }) {
   const { label, cell, isMetric } = useModel();
   const rows = e.rows ?? [];
   const numeric = e.columns.map((c, i) => isMetric(c) || rows.every((r) => r[i] == null || toNumber(r[i]) !== null));
-  if (!rows.length) return <p className="rounded-xl bg-muted px-4 py-6 text-center text-sm text-muted-foreground">这次查询没有返回数据。</p>;
+  if (!rows.length) return <p className="rounded-xl bg-muted px-4 py-6 text-center text-sm text-muted-foreground">无数据</p>;
   return (
     <div className="overflow-hidden rounded-xl border">
       <div className="max-h-[52dvh] overflow-auto">
@@ -56,7 +56,7 @@ function EvidencePanel({ e, open, onOpenChange }: { e: Evidence; open: boolean; 
     >
       <EvidenceTable e={e} />
       {(e.row_count > SHOWN || e.truncated) && (
-        <p className="mt-2 text-[12px] text-muted-foreground">只列出前 {Math.min(SHOWN, e.rows.length)} 行，共 {e.row_count} 行。</p>
+        <p className="mt-2 text-[12px] text-muted-foreground">前 {Math.min(SHOWN, e.rows.length)} 行，共 {e.row_count} 行</p>
       )}
       <Collapsible className="mt-4">
         <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-lg py-1 text-[13px] font-semibold text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40">

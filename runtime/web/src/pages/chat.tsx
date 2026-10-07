@@ -77,7 +77,7 @@ async function stream(question: string, signal: AbortSignal, on: (ev: { kind: st
     } catch {
       /* not JSON */
     }
-    throw new Error(res.status === 401 ? '登录已失效，重新登录后再问。' : msg);
+    throw new Error(res.status === 401 ? '登录已失效' : msg);
   }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -178,13 +178,13 @@ function TurnView({ turn }: { turn: Turn }) {
               <span>没有答完：{turn.error}</span>
             </div>
           )}
-          {turn.status === 'stopped' && !turn.answer && <p className="text-[13px] text-muted-foreground">这次提问在答完之前停止了。</p>}
+          {turn.status === 'stopped' && !turn.answer && <p className="text-[13px] text-muted-foreground">已停止</p>}
           {turn.status === 'done' && (
             <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
               <span>{dayTime(turn.at)}</span>
               <Button asChild variant={touched ? 'default' : 'outline'} size="sm" className="h-8 rounded-lg px-3 text-[12.5px] font-semibold">
                 <Link href="/app/consult">
-                  <FolderOpenIcon /> {touched ? '这次记下了新内容，去咨询档案看' : '打开咨询档案'}
+                  <FolderOpenIcon /> {touched ? '打开咨询档案' : '打开咨询档案'}
                 </Link>
               </Button>
             </div>
@@ -198,7 +198,6 @@ function TurnView({ turn }: { turn: Turn }) {
 function History({ turns, onPick, onClear }: { turns: Turn[]; onPick: (id: string) => void; onClear: () => void }) {
   return (
     <div className="grid gap-1">
-      {turns.length === 0 && <p className="px-2 py-3 text-[13px] text-muted-foreground">问过的问题会留在这里（只存在这台设备的浏览器里）。</p>}
       {[...turns].reverse().map((t) => (
         <button
           key={t.id}
@@ -276,7 +275,7 @@ export function ChatPage() {
           }));
         } else if (ev.kind === 'error') update(id, (t) => ({ ...t, status: 'error', error: ev.text, ms: Date.now() - started }));
       });
-      update(id, (t) => (t.status === 'running' ? { ...t, status: 'error', error: '连接在回答完成前断开了。', ms: Date.now() - started } : t));
+      update(id, (t) => (t.status === 'running' ? { ...t, status: 'error', error: '连接已断开', ms: Date.now() - started } : t));
     } catch (e) {
       const stopped = (e as Error).name === 'AbortError';
       update(id, (t) => ({ ...t, status: stopped ? 'stopped' : 'error', error: stopped ? undefined : (e as Error).message, ms: Date.now() - started }));
@@ -307,9 +306,6 @@ export function ChatPage() {
         <div className="mx-auto flex w-full max-w-[820px] items-end gap-3 pt-6 md:pt-9">
           <div className="mr-auto">
             <h1 className="text-[26px] font-extrabold tracking-tight md:text-[30px]">顾问对话</h1>
-            <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-muted-foreground">
-              顾问以你的身份查数。它能记下目标、结论，提出计划，但计划要审批人在咨询档案里采纳才会执行。
-            </p>
           </div>
           <Button variant="outline" size="icon" className="size-9 shrink-0 rounded-xl lg:hidden" onClick={() => setHistoryOpen(true)} aria-label="问过的问题">
             <HistoryIcon className="size-4" />
@@ -319,8 +315,6 @@ export function ChatPage() {
         <div className="flex-1 py-6">
           {turns.length === 0 ? (
             <div className="mx-auto max-w-[820px] pt-2 md:pt-4">
-              <h2 className="text-[17px] font-extrabold">从一个具体的问题开始</h2>
-              <p className="mt-1 text-[13.5px] text-muted-foreground">说清楚哪个厂、哪条线、哪个指标，答案会更准。</p>
               <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
                 {STARTERS.map((s) => (
                   <button
@@ -334,7 +328,7 @@ export function ChatPage() {
                   </button>
                 ))}
               </div>
-              {!info.copilot && <p className="mt-4 text-[13px] text-destructive">这个部署没有开启顾问对话（服务端没有配置大模型）。</p>}
+              {!info.copilot && <p className="mt-4 text-[13px] text-destructive">顾问对话未开启</p>}
             </div>
           ) : (
             <div className="mx-auto grid max-w-[820px] gap-9">
@@ -362,7 +356,7 @@ export function ChatPage() {
                 }
               }}
               rows={1}
-              placeholder={running ? '顾问正在回答…' : phone ? '问一个经营问题' : '问一个经营问题，例如「上周哪台设备停机最多？」'}
+              placeholder={running ? '顾问正在回答…' : phone ? '问一个经营问题' : '输入问题'}
               disabled={!info.copilot}
               aria-label="你的问题"
               className="max-h-40 min-h-10 resize-none border-0 bg-transparent px-2.5 py-2 text-[15px] shadow-none focus-visible:ring-0 md:text-[14.5px] dark:bg-transparent"
@@ -377,7 +371,6 @@ export function ChatPage() {
               </Button>
             )}
           </div>
-          <p className="mt-1.5 text-center text-[11.5px] text-muted-foreground max-md:hidden">Enter 发送，Shift + Enter 换行。一次提问通常要半分钟到两分钟。</p>
         </form>
       </div>
 

@@ -177,7 +177,7 @@ function Record({ pv }: { pv: PlanView }) {
             )}
           </>
         ) : (
-          <span className="text-muted-foreground">等一位审批人决定。提出的人不能自己采纳。</span>
+          <span className="text-muted-foreground">待审批</span>
         )}
       </Step>
       <Step icon={<RulerIcon className="size-3.5" />} title="验收" done={!!acc} last>
@@ -199,20 +199,20 @@ function Record({ pv }: { pv: PlanView }) {
             </div>
             {pv.progress && (
               <p className="mt-2 rounded-lg bg-card px-3 py-2 text-[12.5px] leading-relaxed">
-                <span className="font-semibold">{dayTime(pv.progress.at)} 量过一次。</span>
+                <span className="font-semibold">{dayTime(pv.progress.at)} 测量</span>
                 {reading(pv.progress, model)}
               </p>
             )}
           </>
         ) : (
-          <span className="text-muted-foreground">{pv.state === 'rejected' ? '计划已否决，不再验收。' : `采纳后开始计时，${pv.plan.expect.within_days} 天后验收。`}</span>
+          <span className="text-muted-foreground">{pv.state === 'rejected' ? '已否决' : `采纳后 ${pv.plan.expect.within_days} 天`}</span>
         )}
       </Step>
     </ol>
   );
 }
 
-type Ask = { verb: Verb; title: string; description: string; confirm: string; needWhy: boolean; whyLabel?: string; danger?: boolean };
+type Ask = { verb: Verb; title: string; confirm: string; needWhy: boolean; whyLabel?: string; danger?: boolean };
 
 function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
   const [ask, setAsk] = useState<Ask | null>(null);
@@ -233,14 +233,14 @@ function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
         const b = res.decision?.baseline;
         const pinned = b ? `基线 ${label(b.metric)} ${fmt(b.metric, b.value)} 已钉住。` : '';
         if (ok < runs.length) {
-          toast.warning(`已采纳计划 ${pv.plan.id}，但有 ${runs.length - ok} 个动作没有下发成功`, { description: `${pinned}失败原因写在计划的动作下面，需要到现场手动处理。` });
+          toast.warning(`已采纳计划 ${pv.plan.id}，但有 ${runs.length - ok} 个动作没有下发成功`, { description: pinned });
         } else {
-          toast.success(`已采纳计划 ${pv.plan.id}`, { description: `${pinned}${runs.length ? `${runs.length} 个动作都已下发。` : ''}` });
+          toast.success(`已采纳计划 ${pv.plan.id}`, { description: `${pinned}${runs.length ? `${runs.length} 个动作已下发。` : ''}` });
         }
       } else if (verb === 'reject') {
         toast.success(`已否决计划 ${pv.plan.id}`);
       } else if (verb === 'measure') {
-        toast.success('量好了，进度记在决定记录里', { description: reading(res, model) });
+        toast.success('已测量', { description: reading(res, model) });
       } else {
         toast.success('已验收', { description: reading(res, model) });
       }
@@ -260,17 +260,16 @@ function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
     <div className="flex flex-wrap items-center justify-end gap-2 border-t bg-surface/60 px-4 py-3 md:px-6">
       {pv.state === 'proposed' ? (
         <>
-          <p className="mr-auto text-[12.5px] text-muted-foreground max-sm:w-full">采纳后会钉住基线{n ? `、下发 ${n} 个动作` : ''}，并开始 {pv.plan.expect.within_days} 天的验收计时。</p>
           <Button
             variant="outline"
             className="h-9 rounded-xl px-4 text-destructive hover:text-destructive max-sm:flex-1"
-            onClick={() => setAsk({ verb: 'reject', title: `否决计划 ${pv.plan.id}`, description: '否决之后这个计划不会再执行。理由会记进决定记录，提出的人能看到。', confirm: '否决', needWhy: true, whyLabel: '否决理由（必填）', danger: true })}
+            onClick={() => setAsk({ verb: 'reject', title: `否决计划 ${pv.plan.id}`, confirm: '否决', needWhy: true, whyLabel: '否决理由（必填）', danger: true })}
           >
             否决
           </Button>
           <Button
             className="h-9 rounded-xl px-4 font-bold max-sm:flex-1"
-            onClick={() => setAsk({ verb: 'adopt', title: `采纳计划 ${pv.plan.id}`, description: `采纳后会立刻量一次基线并钉住${n ? `，然后把 ${n} 个动作下发到现场` : ''}。${pv.plan.expect.within_days} 天后按钉住的基线验收。`, confirm: n ? '采纳并下发' : '采纳', needWhy: false, whyLabel: '采纳理由' })}
+            onClick={() => setAsk({ verb: 'adopt', title: `采纳计划 ${pv.plan.id}`, confirm: n ? '采纳并下发' : '采纳', needWhy: false, whyLabel: '采纳理由' })}
           >
             <SendIcon /> {n ? '采纳并下发' : '采纳'}
           </Button>
@@ -283,7 +282,7 @@ function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
           <Button
             variant="ghost"
             className="h-9 rounded-xl px-4 text-muted-foreground max-sm:flex-1"
-            onClick={() => setAsk({ verb: 'accept', title: `提前验收计划 ${pv.plan.id}`, description: `验收窗口${pv.due ? `到 ${day(pv.due)}` : ''}才结束。现在验收会按已有的数据给出最终结论，之后不能再改。`, confirm: '现在验收', needWhy: false })}
+            onClick={() => setAsk({ verb: 'accept', title: `提前验收计划 ${pv.plan.id}`, confirm: '现在验收', needWhy: false })}
           >
             提前验收
           </Button>
@@ -299,7 +298,6 @@ function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
             }
           }}
           title={ask.title}
-          description={ask.description}
           footer={
             <>
               <Button variant="outline" className="h-10 rounded-xl px-4" onClick={() => setAsk(null)}>取消</Button>
@@ -330,11 +328,11 @@ function Decisions({ pv, onChanged }: { pv: PlanView; onChanged: () => void }) {
                   rows={4}
                   value={why}
                   onChange={(e) => setWhy(e.target.value)}
-                  placeholder={ask.verb === 'adopt' ? '例如：证据充分，代价可以接受。先试一个验收周期，护栏破了就停。' : '例如：备件不够，先补库存再说。'}
+                  placeholder="理由"
                   aria-invalid={tried && ask.needWhy && !why.trim()}
                   className="rounded-xl text-[14px]"
                 />
-                {tried && ask.needWhy && !why.trim() && <p className="text-[12.5px] text-destructive">写一句理由再否决。</p>}
+                {tried && ask.needWhy && !why.trim() && <p className="text-[12.5px] text-destructive">请填写理由</p>}
               </div>
             )}
           </div>

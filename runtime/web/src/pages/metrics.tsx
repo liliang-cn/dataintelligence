@@ -92,7 +92,7 @@ export function MetricsPage() {
     const list = model.metrics.filter(hit);
     const ratio = (m: MetricInfo) => model.isShare(m.name) || m.additivity === 'non_additive';
     return [
-      { title: '比率与效率', note: '按分子分母重新算，不能直接相加', items: list.filter(ratio) },
+      { title: '比率与效率', note: '不可直接相加', items: list.filter(ratio) },
       { title: '数量与时长', note: '可以按任意维度相加', items: list.filter((m) => !ratio(m)) },
     ].filter((g) => g.items.length);
   }, [model, q]);
@@ -102,13 +102,10 @@ export function MetricsPage() {
       <div className="flex flex-wrap items-end gap-x-6 gap-y-4">
         <div className="mr-auto">
           <h1 className="text-[26px] font-extrabold tracking-tight md:text-[30px]">指标</h1>
-          <p className="mt-1.5 max-w-[60ch] text-[14px] leading-relaxed text-muted-foreground">
-            顾问能查的每个数都在这里：它是什么意思，能按什么拆开看。{model.ready && `共 ${model.metrics.length} 个。`}
-          </p>
         </div>
         <div className="relative w-full sm:w-72">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="找指标，例如 停机、合格率" className="h-10 rounded-xl bg-card pl-9" aria-label="找指标" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索指标" className="h-10 rounded-xl bg-card pl-9" aria-label="找指标" />
         </div>
       </div>
 
@@ -126,7 +123,7 @@ export function MetricsPage() {
         </div>
       )}
       {model.ready && groups.length === 0 && (
-        <p className="mt-10 text-center text-[14px] text-muted-foreground">{q ? `没有和「${q}」相关的指标。换个说法试试，比如「废品」「开动率」。` : '模型里还没有指标。'}</p>
+        <p className="mt-10 text-center text-[14px] text-muted-foreground">{q ? `没有「${q}」` : '没有指标'}</p>
       )}
       {groups.map((g) => (
         <section key={g.title} className="mt-8">
