@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -141,6 +142,38 @@ type StreamEvent struct {
 	Kind string `json:"kind"` // tool_call | tool_result | thinking | verify | verified | complete
 	Tool string `json:"tool,omitempty"`
 	Text string `json:"text,omitempty"`
+	// Args are a tool call's arguments; Result is a compact copy of what it returned (a query's
+	// columns, first rows and SQL), so a viewer can follow every round of the loop.
+	Args   map[string]any `json:"args,omitempty"`
+	Result any            `json:"result,omitempty"`
+}
+
+// compact keeps what a viewer needs from a tool result: tables cut to their first rows, anything
+// else cut to a few kilobytes.
+func compact(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) == nil {
+		if rows, ok := m["rows"].([]any); ok {
+			m["row_count"] = len(rows)
+			if len(rows) > 20 {
+				m["rows"] = rows[:20]
+			}
+			if b2, err := json.Marshal(m); err == nil && len(b2) <= 16_000 {
+				return m
+			}
+		}
+	}
+	if len(b) <= 6_000 {
+		var out any
+		if json.Unmarshal(b, &out) == nil {
+			return out
+		}
+	}
+	return string(b[:min(len(b), 6_000)]) + "…"
 }
 
 // Stream runs the agent in a fresh session and calls emit for each progress
@@ -161,10 +194,10 @@ func (a *Agent) Stream(ctx context.Context, goal string, emit func(StreamEvent))
 			calls++
 			tools = append(tools, ev.ToolName)
 			args[ev.ToolName] = ev.ToolArgs
-			emit(StreamEvent{Kind: "tool_call", Tool: ev.ToolName})
+			emit(StreamEvent{Kind: "tool_call", Tool: ev.ToolName, Args: ev.ToolArgs})
 		case agentpkg.EventTypeToolResult:
 			evid.add(ev.ToolName, args[ev.ToolName], ev.ToolResult)
-			emit(StreamEvent{Kind: "tool_result", Tool: ev.ToolName})
+			emit(StreamEvent{Kind: "tool_result", Tool: ev.ToolName, Result: compact(ev.ToolResult)})
 		case agentpkg.EventTypeThinking:
 			emit(StreamEvent{Kind: "thinking", Text: ev.Content})
 		case agentpkg.EventTypePartial:
