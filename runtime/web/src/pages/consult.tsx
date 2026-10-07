@@ -43,7 +43,7 @@ function GoalCase({ gv, onChanged, loose }: { gv: GoalView; onChanged: () => voi
           <GoalHeader gv={gv} />
         </>
       )}
-      <Section title="结论" note={gv.findings.length ? `${gv.findings.length} 条，背后是 ${queries} 次服务器执行过的查询` : undefined}>
+      <Section title="结论" note={gv.findings.length ? `${gv.findings.length} 条` : undefined}>
         {gv.findings.length ? (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {gv.findings.map((f) => <FindingCard key={f.id} f={f} highlight={lit === f.id} />)}

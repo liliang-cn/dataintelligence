@@ -82,7 +82,7 @@ function HeadlineNumbers({ gv }: { gv: GoalView }) {
       </div>
       {g.baseline && (
         <p className="mt-3 text-[12px] text-muted-foreground">
-          基线取 {day(g.baseline.from)}至{day(g.baseline.to)}，{g.baseline.data_days} 天有数据
+          {day(g.baseline.from)}–{day(g.baseline.to)}
         </p>
       )}
       {reading && now !== null && (

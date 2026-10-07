@@ -60,7 +60,7 @@ export function TokenForm({ onDone }: { onDone?: () => void }) {
           autoComplete={open ? 'name' : 'current-password'}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={open ? '例如 张工' : '粘贴部署方发给你的令牌'}
+          placeholder={open ? '姓名' : '令牌'}
           aria-invalid={!!error}
           className="h-11 rounded-xl pl-9 text-[15px]"
         />
