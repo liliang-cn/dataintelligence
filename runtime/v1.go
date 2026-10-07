@@ -58,6 +58,8 @@ type V1 struct {
 	// Copilot answers the console's chat (POST /v1/copilot/stream); nil
 	// disables it.
 	Copilot *copilot.Agent
+	// Reviews are the standing consultations (copilot.reviews); nil when none.
+	Reviews *Reviews
 }
 
 // resolve picks the database this request is for (X-DI-Database, ?database=,

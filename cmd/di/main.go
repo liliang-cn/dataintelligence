@@ -333,8 +333,15 @@ func runServe(argv []string) {
 		}
 	}
 
+	reviews, err := runtime.OpenReviews(cfg)
+	if err != nil {
+		fail(err)
+	}
+	if adv.cop != nil {
+		reviews.Schedule(ctx, adv.cop, func(msg string, kv ...any) { fmt.Fprintln(os.Stderr, append([]any{"--", msg}, kv...)...) })
+	}
 	v1 := &runtime.V1{DBs: dbs, Pol: pol, Verify: verifier, Engagement: cfg.Engagement, Users: adv.users, Consult: adv.consult,
-		Title: cfg.UI.Title, Copilot: adv.cop}
+		Title: cfg.UI.Title, Copilot: adv.cop, Reviews: reviews}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", v1.Handler())
 	web.Mount(mux)

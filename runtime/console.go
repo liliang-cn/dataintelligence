@@ -19,6 +19,7 @@ func (v *V1) mountConsole(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/console", v.consoleInfo)
 	mux.HandleFunc("GET /v1/dimensions", v.dimensionListV1)
 	mux.HandleFunc("POST /v1/copilot/stream", v.copilotStream)
+	v.mountReviews(mux)
 }
 
 func (v *V1) consoleInfo(w http.ResponseWriter, _ *http.Request) {

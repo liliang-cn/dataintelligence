@@ -9,6 +9,26 @@ import (
 
 // Identity is a principal written in config: who a background measurement or
 // an anonymous copilot request acts as.
+// Review is one standing consultation (a whole-business review, a monthly
+// quality review …).
+type Review struct {
+	// Name identifies it in the API (/v1/reviews/{name}/run).
+	Name  string `yaml:"name"`
+	Title string `yaml:"title"`
+	// Prompt (or PromptFile, beside the config) is what the copilot is asked.
+	Prompt     string `yaml:"prompt"`
+	PromptFile string `yaml:"prompt_file"`
+	// Weekday (mon … sun) and Hour schedule it weekly, in Timezone (default
+	// Asia/Shanghai); an empty weekday runs it only on demand.
+	Weekday  string `yaml:"weekday"`
+	Hour     int    `yaml:"hour"`
+	Timezone string `yaml:"timezone"`
+	// Roles may start it on demand; empty means nobody can (schedule only).
+	Roles []string `yaml:"roles"`
+	// As is who scheduled runs act as (and are recorded as proposing).
+	As Identity `yaml:"as"`
+}
+
 type Identity struct {
 	User  string            `yaml:"user"`
 	Role  string            `yaml:"role"`
@@ -39,6 +59,12 @@ type Copilot struct {
 	// Checks is the conflict-check file behind health_check; empty disables
 	// the tool.
 	Checks string `yaml:"checks"`
+	// Reviews are standing consultations: a question the copilot is asked on a
+	// schedule, or on demand by the roles allowed, whose report is kept.
+	Reviews []Review `yaml:"reviews"`
+	// ReviewStore is the SQLite file the reports are kept in (default
+	// reviews.db beside the config file).
+	ReviewStore string `yaml:"review_store"`
 	// MCP are external MCP servers. Tools are read-only lookups the agent may
 	// call; actions only ever run as part of an adopted plan.
 	MCP []MCPServer `yaml:"mcp"`
