@@ -36,6 +36,7 @@ metrics:
   - {name: output, description: units made, entity: run, agg: sum, expr: qty}
   - {name: scrap,  description: units scrapped, entity: run, agg: sum, expr: scrap}
   - {name: site_count, description: sites, entity: site, agg: count, expr: site_id}
+  - {name: good_rate, description: 良率, formula: "1.0 * (output - scrap) / nullif(output, 0)"}
 `
 
 var adoptDay = time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -201,6 +202,21 @@ func TestGoalNeedsDirectionMagnitudeAndDeadline(t *testing.T) {
 	} {
 		_, err := f.svc.AddGoal(ctx, in, alice, "")
 		wantRule(t, err, RuleVagueGoal)
+	}
+}
+
+// A rate cannot be pushed past 100%: line A's good rate is 98%, so +5% (relative) is refused
+// and +1% is not.
+func TestRateGoalMustStayWithinAHundredPercent(t *testing.T) {
+	f := newFixture(t, 2)
+	_, err := f.svc.AddGoal(ctx, GoalInput{What: "x", Metric: "good_rate", Direction: Up, By: 0.05, WithinDays: 30, Scope: lineA}, alice, "")
+	wantRule(t, err, RuleOutOfRange)
+	if g, err := f.svc.AddGoal(ctx, GoalInput{What: "x", Metric: "good_rate", Direction: Up, By: 0.01, WithinDays: 30, Scope: lineA}, alice, ""); err != nil || *g.Target() > 1 {
+		t.Fatalf("goal within range: %v %v", g, err)
+	}
+	// a count is not a rate: output may grow past any bound
+	if _, err := f.svc.AddGoal(ctx, GoalInput{What: "x", Metric: "output", Direction: Up, By: 2, WithinDays: 30, Scope: lineA}, alice, ""); err != nil {
+		t.Fatal(err)
 	}
 }
 

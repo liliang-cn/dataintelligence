@@ -295,6 +295,7 @@ const (
 	RuleAsOfNotAllowed   Rule = "as_of_not_allowed"
 	RuleWhyRequired      Rule = "why_required"
 	RuleNotFound         Rule = "not_found"
+	RuleOutOfRange       Rule = "target_out_of_range"
 )
 
 // Refusal is a request the loop's rules turned down. It is not a failure of
@@ -329,6 +330,16 @@ func RuleOf(err error) Rule {
 // and approving as an admin is exactly what the two-person rule stops.
 func samePerson(a, b string) bool {
 	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// share says a metric is a fraction of a whole (a rate, a yield): its values lie in 0..1, so no
+// target outside that range can ever be reached.
+func share(m *semantic.Metric, baseline float64) bool {
+	if m == nil || baseline < 0 || baseline > 1 {
+		return false
+	}
+	return strings.Contains(m.Description, "率") || strings.Contains(m.Description, "%") ||
+		strings.HasSuffix(m.Name, "_rate") || strings.HasSuffix(m.Name, "_yield")
 }
 
 func target(baseline float64, d Direction, by float64) float64 {

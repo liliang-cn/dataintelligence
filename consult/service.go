@@ -130,6 +130,16 @@ func (s *Service) AddGoal(ctx context.Context, in GoalInput, who governance.Prin
 	if g.Baseline, err = measure(ctx, s.Query, mp, g.Metric, g.Scope, td, anchor.AddDate(0, 0, -g.WithinDays), anchor); err != nil {
 		return nil, err
 	}
+	if b := g.Baseline.Value; b != nil && share(s.Model.Metric(g.Metric), *b) {
+		if t := target(*b, g.Direction, g.By); t > 1 || t < 0 {
+			room := 1 - *b
+			if g.Direction == Down {
+				room = *b
+			}
+			return nil, refuse(RuleOutOfRange, "%s 是比率，基线 %.2f%%，by=%g 是相对幅度，目标会到 %.2f%%，不可能达到；这个方向最多还有 %.2f 个百分点（by 不超过 %.4f）",
+				g.Metric, *b*100, g.By, t*100, room*100, room / *b)
+		}
+	}
 	id, err := s.Store.insertWithID(ctx, kGoal, "", who.User, func(id string) any { g.ID = id; return g })
 	if err != nil {
 		return nil, err
