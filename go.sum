@@ -207,6 +207,8 @@ github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 h1:QwWKgMY28TAXaDl+
 github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728/go.mod h1:1fEHWurg7pvf5SG6XNE5Q8UZmOwex51Mkx3SLhrW5B4=
 github.com/liliang-cn/agent-go/v3 v3.44.0 h1:8oyZZ7JRfUHAoXRHfooTqzPu4MUoPSCj7feRJsvaoHQ=
 github.com/liliang-cn/agent-go/v3 v3.44.0/go.mod h1:RfIFY/C0mIiq6CRgXp9pq/kBoZeOdb94pAUcEv0Gc9I=
+github.com/liliang-cn/agent-go/v3 v3.48.0 h1:HSOIlGyl7N5Yx6x5yIfu2HClbeDLO7XvE8L+vnB1McU=
+github.com/liliang-cn/agent-go/v3 v3.48.0/go.mod h1:RfIFY/C0mIiq6CRgXp9pq/kBoZeOdb94pAUcEv0Gc9I=
 github.com/liliang-cn/agentcli v0.1.4 h1:rq+y3RcgUCEFO8UwD65v6GOz5efw8i6bhSDw1pzKOMQ=
 github.com/liliang-cn/agentcli v0.1.4/go.mod h1:mYOQB07cYq67fFYU08J6RT9xVKQhyX/P4VnhYYu57Uc=
 github.com/liliang-cn/agentexec v0.5.0 h1:cTdZF/ccLQOFbx6qdUOrknHe9zRkFErQchDeQzviZvY=

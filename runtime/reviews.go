@@ -68,6 +68,10 @@ func OpenReviews(cfg *config.Config) (*Reviews, error) {
 		started_at TEXT NOT NULL, finished_at TEXT, answer TEXT, steps TEXT, corrected TEXT, status TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
+	// a run that was going when the service stopped will never finish
+	if _, err := db.Exec(`UPDATE runs SET status='failed', finished_at=?, answer='服务重启，诊断中断' WHERE status='running'`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return nil, err
+	}
 	r.DB = db
 	return r, nil
 }

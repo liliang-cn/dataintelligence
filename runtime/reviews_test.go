@@ -34,4 +34,19 @@ func TestReviewsOpenAndRecord(t *testing.T) {
 	if _, ok := r.find("group"); !ok {
 		t.Fatal("review not found")
 	}
+
+	// a run cut off by a restart is closed as failed when the store is opened again
+	if _, err := r.DB.Exec(`INSERT INTO runs (name, title, by, trigger, started_at, status) VALUES ('group','集团经营诊断','厂长','manual','2026-10-07T01:00:00Z','running')`); err != nil {
+		t.Fatal(err)
+	}
+	r.DB.Close()
+	r, err = OpenReviews(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var running, failed int
+	r.DB.QueryRow(`SELECT count(*) FILTER (WHERE status='running'), count(*) FILTER (WHERE status='failed' AND finished_at IS NOT NULL) FROM runs`).Scan(&running, &failed)
+	if running != 0 || failed != 1 {
+		t.Fatalf("after reopen: running %d, failed %d", running, failed)
+	}
 }
