@@ -30,7 +30,6 @@ function GoalCase({ gv, onChanged, loose }: { gv: GoalView; onChanged: () => voi
     setLit(id);
     setTimeout(() => setLit(null), 1600);
   };
-  const queries = gv.findings.reduce((n, f) => n + (f.evidence?.length ?? 0), 0);
   return (
     <article className="overflow-hidden rounded-3xl bg-card shadow-card ring-1 ring-border/70">
       {loose ? (
