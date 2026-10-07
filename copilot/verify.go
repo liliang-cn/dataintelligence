@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/liliang-cn/agent-go/v3/pkg/domain"
 )
@@ -93,13 +94,25 @@ const verifyPrompt = `你是审稿人。下面是一位顾问本轮调用工具�
 === 顾问的回答 ===
 %s`
 
-// verify returns the answer checked against the evidence and what was changed.
-func verify(ctx context.Context, llm domain.Generator, answer string, ev *evidence) (string, []string) {
+// verify returns the answer checked against the evidence, what was changed, and whether the
+// check ran at all (a busy model is retried twice; after that the answer goes out unchecked and
+// says so, rather than passing an error off as a correction).
+func verify(ctx context.Context, llm domain.Generator, answer string, ev *evidence) (string, []string, bool) {
 	text := ev.String()
 	if strings.TrimSpace(answer) == "" || text == "" || llm == nil {
-		return answer, nil
+		return answer, nil, true
 	}
-	out, err := llm.Generate(ctx, fmt.Sprintf(verifyPrompt, text, answer), &domain.GenerationOptions{Temperature: 0})
+	var out string
+	var err error
+	for try := 0; try < 3; try++ {
+		if out, err = llm.Generate(ctx, fmt.Sprintf(verifyPrompt, text, answer), &domain.GenerationOptions{Temperature: 0}); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Duration(5*(try+1)) * time.Second):
+		}
+	}
 	var got struct {
 		Revised string   `json:"revised"`
 		Removed []string `json:"removed"`
@@ -119,8 +132,5 @@ func verify(ctx context.Context, llm domain.Generator, answer string, ev *eviden
 		answer += "\n\n> 以下编号没有出现在本轮任何查询结果里，请勿采信：" + strings.Join(codes, "、")
 		changes = append(changes, "未经查询的编号："+strings.Join(codes, "、"))
 	}
-	if err != nil {
-		changes = append(changes, "核对没有完成："+err.Error())
-	}
-	return answer, changes
+	return answer, changes, err == nil
 }

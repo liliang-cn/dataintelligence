@@ -26,6 +26,8 @@ type Turn = {
   answer?: string;
   /** what the final check changed in the answer, one line each */
   corrected?: string[];
+  /** the answer check could not run (the model was busy) */
+  unchecked?: boolean;
   error?: string;
   ms?: number;
 };
@@ -162,6 +164,7 @@ function TurnView({ turn }: { turn: Turn }) {
           {turn.answer && (
             <div className="rounded-2xl bg-card px-4 py-4 ring-1 ring-border/70 md:px-5">
               <Markdown text={turn.answer} />
+              {turn.unchecked && <p className="text-[12.5px] text-muted-foreground">核对未完成</p>}
               {turn.corrected && turn.corrected.length > 0 && (
                 <div className="mt-4 border-t pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
                   <p className="font-semibold">核对时改正了 {turn.corrected.length} 处：</p>
@@ -256,6 +259,8 @@ export function ChatPage() {
             return { ...t, steps };
           });
         else if (ev.kind === 'verify') update(id, (t) => ({ ...t, steps: [...t.steps.map((s) => (s.done ? s : { ...s, done: true })), { tool: VERIFY_STEP, done: false, at: Date.now() }] }));
+        else if (ev.kind === 'verify_skipped')
+          update(id, (t) => ({ ...t, unchecked: true, steps: t.steps.map((s) => (s.tool === VERIFY_STEP && !s.done ? { ...s, done: true, ms: Date.now() - s.at } : s)) }));
         else if (ev.kind === 'verified')
           update(id, (t) => ({
             ...t,

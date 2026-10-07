@@ -139,7 +139,7 @@ func (a *Agent) Close() error { return a.svc.Close() }
 // StreamEvent is a progress event during a streaming run (UI-facing, no agent-go
 // types leak out).
 type StreamEvent struct {
-	Kind string `json:"kind"` // tool_call | tool_result | thinking | verify | verified | complete
+	Kind string `json:"kind"` // tool_call | tool_result | thinking | verify | verified | verify_skipped | complete
 	Tool string `json:"tool,omitempty"`
 	Text string `json:"text,omitempty"`
 	// Args are a tool call's arguments; Result is a compact copy of what it returned (a query's
@@ -216,8 +216,13 @@ func (a *Agent) Stream(ctx context.Context, goal string, emit func(StreamEvent))
 		answer = "error: " + failure
 	} else if calls > 0 {
 		emit(StreamEvent{Kind: "verify", Text: "对照本轮查询结果核对回答里的名称和数字"})
-		answer, corrected = verify(ctx, a.llm, answer, &evid)
-		emit(StreamEvent{Kind: "verified", Text: strings.Join(corrected, "\n")})
+		var checked bool
+		answer, corrected, checked = verify(ctx, a.llm, answer, &evid)
+		if checked {
+			emit(StreamEvent{Kind: "verified", Text: strings.Join(corrected, "\n")})
+		} else {
+			emit(StreamEvent{Kind: "verify_skipped", Text: strings.Join(corrected, "\n")})
+		}
 	}
 	emit(StreamEvent{Kind: "complete", Text: answer})
 	return &Result{Answer: answer, Tools: tools, ToolCalls: calls, Corrected: corrected}, nil
