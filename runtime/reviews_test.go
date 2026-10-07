@@ -13,7 +13,7 @@ import (
 func TestReviewsOpenAndRecord(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "di.yaml")
-	if err := os.WriteFile(path, []byte("model: m.yaml\ncopilot:\n  reviews:\n    - {name: group, title: 集团经营诊断, prompt: 看一下, weekday: mon, hour: 8, roles: [approver]}\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("model: m.yaml\nwarehouse: {dsn: \"postgres://x@localhost/x\"}\ncopilot:\n  reviews:\n    - {name: group, title: 集团经营诊断, prompt: 看一下, weekday: mon, hour: 8, roles: [approver]}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load(path)
